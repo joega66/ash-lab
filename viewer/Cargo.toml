@@ -1,0 +1,15 @@
+[package]
+name = "viewer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ash = { git = "https://github.com/ash-rs/ash", features = ["provisional"] }
+ash-window = { git = "https://github.com/ash-rs/ash" }
+bytemuck = { version = "1.24", features = ["derive"] }
+cgmath = "0.18"
+raw-window-handle = "0.6.2"
+rhi = { path = "../rhi" }
+rhi-reflect = { path = "../rhi-reflect" }
+shaders = { path = "../shaders" }
+winit = "0.30.13"
