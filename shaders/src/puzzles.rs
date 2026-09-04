@@ -7,6 +7,8 @@ use rhi_reflect::*;
 pub struct Add10PushConstant {
     pub output: RWDeviceAddress<f32>,
     pub a: DeviceAddress<f32>,
+    pub len: u32,
+    pub _padding: u32,
 }
 kernel!(Add10, (), Add10PushConstant, "main", "add_10.slang");
 
@@ -39,8 +41,10 @@ mod test {
             Add10PushConstant {
                 output: output.into(),
                 a: a.into(),
+                len: a.len() as u32,
+                _padding: Default::default(),
             },
-            UInt3::splat(1),
+            grid_dim_1d(a.len())
         );
 
         // TODO: Host readback is tedious.

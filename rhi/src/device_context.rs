@@ -1173,6 +1173,10 @@ impl<T> DeviceBuffer<T> {
         self.details.size
     }
 
+    pub fn len(&self) -> usize {
+        self.size() / std::mem::size_of::<T>()
+    }
+
     pub fn address(&self) -> vk::DeviceAddress {
         self.details.address
     }

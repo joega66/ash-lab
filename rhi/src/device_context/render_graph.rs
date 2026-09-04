@@ -243,9 +243,10 @@ impl DeviceContext {
 
     fn push_buffer<T>(&mut self, buffer: RgBufferShadow) -> RgBuffer<T> {
         let id = RgResourceId::buffer(self.rg.virtual_buffers.len());
+        let size = buffer.size;
         self.rg.virtual_buffers.push(buffer);
         self.rg.versions.insert(id, 0); // version 0 = imported / initial
-        RgBuffer::<T>::new(self.rg.epoch, id)
+        RgBuffer::<T>::new(self.rg.epoch, id, size)
     }
 
     fn push_image(&mut self, image: RgImageShadow) -> RgImage {
@@ -1053,7 +1054,14 @@ impl RgResourceId {
 pub struct RgBuffer<T> {
     epoch: u32,
     id: RgResourceId,
+    size: usize,
     _marker: PhantomData<fn() -> T>,
+}
+
+impl<T> RgBuffer<T> {
+    pub fn len(&self) -> usize {
+        self.size / std::mem::size_of::<T>()
+    }
 }
 
 impl<T> RgAbstractHandle for RgBuffer<T> {
@@ -1090,10 +1098,11 @@ impl<T> std::fmt::Debug for RgBuffer<T> {
     }
 }
 impl<T> RgBuffer<T> {
-    fn new(epoch: u32, id: RgResourceId) -> Self {
+    fn new(epoch: u32, id: RgResourceId, size: usize) -> Self {
         Self {
             epoch,
             id,
+            size,
             _marker: PhantomData,
         }
     }
