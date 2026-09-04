@@ -49,7 +49,7 @@ mod test {
         ctx.enqueue_fill(output, 0_f32);
 
         let a = ctx.enqueue_create_buffer("a", SIZE);
-        ctx.enqueue_copy(&a_host, a);
+        ctx.enqueue_copy(a_host.as_slice(), a);
 
         ctx.enqueue_function::<Add10>(
             (),
@@ -66,7 +66,7 @@ mod test {
         let output_host = ctx.create_host_buffer(SIZE);
         {
             let output_host = ctx.register_buffer("output_host", &output_host);
-            ctx.enqueue_copy_buffer(output, output_host);
+            ctx.enqueue_copy(output, output_host);
         }
 
         ctx.execute(None).expect("failed to execute");
@@ -104,10 +104,10 @@ mod test {
         ctx.enqueue_fill(output, 0_f32);
 
         let a = ctx.enqueue_create_buffer("a", SIZE);
-        ctx.enqueue_copy(&a_host, a);
+        ctx.enqueue_copy(a_host.as_slice(), a);
 
         let b = ctx.enqueue_create_buffer("b", SIZE);
-        ctx.enqueue_copy(&b_host, b);
+        ctx.enqueue_copy(b_host.as_slice(), b);
 
         ctx.enqueue_function::<Add>(
             (),
@@ -125,7 +125,7 @@ mod test {
         let output_host = ctx.create_host_buffer(SIZE);
         {
             let output_host = ctx.register_buffer("output_host", &output_host);
-            ctx.enqueue_copy_buffer(output, output_host);
+            ctx.enqueue_copy(output, output_host);
         }
 
         ctx.execute(None).expect("failed to execute");

@@ -292,89 +292,8 @@ impl DeviceContext {
         &self.rg.physical_images[self.index_checked(image)]
     }
 
-    pub fn enqueue_copy<T: bytemuck::Pod>(&mut self, src_ptr: &[T], dst_buf: RgBuffer<T>) {
-        let src_ptr = bytemuck::cast_slice(src_ptr);
-
-        let tmp_buf = self.enqueue_create_buffer_inner::<T>(
-            "staging_buffer",
-            src_ptr.len(),
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            &vk_mem::AllocationCreateInfo {
-                flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-                usage: vk_mem::MemoryUsage::Auto,
-                ..Default::default()
-            },
-        );
-
-        let src_vec = src_ptr.to_vec();
-
-        self.enqueue_pass(
-            "enqueue_copy",
-            &[
-                buffer_transfer_read(tmp_buf),
-                buffer_transfer_write(dst_buf),
-            ],
-            &[],
-            Box::new(
-                move |ctx: &mut DeviceContext, command_buffer: vk::CommandBuffer| {
-                    let tmp_buf = ctx.buffer(&tmp_buf);
-                    let dst_buf = ctx.buffer(&dst_buf);
-
-                    let tmp_ptr = ctx.map_memory(tmp_buf.allocation, tmp_buf.size);
-                    tmp_ptr.copy_from_slice(&src_vec);
-                    ctx.unmap_memory(tmp_buf.allocation);
-
-                    assert_eq!(tmp_buf.size, dst_buf.size);
-
-                    let regions = [vk::BufferCopy::default()
-                        .src_offset(0)
-                        .dst_offset(0)
-                        .size(tmp_buf.size as vk::DeviceSize)];
-
-                    unsafe {
-                        ctx.device.cmd_copy_buffer(
-                            command_buffer,
-                            tmp_buf.buffer,
-                            dst_buf.buffer,
-                            &regions,
-                        );
-                    }
-                },
-            ),
-        );
-    }
-
-    pub fn enqueue_copy_buffer<T: 'static>(&mut self, src_buf: RgBuffer<T>, dst_buf: RgBuffer<T>) {
-        self.enqueue_pass(
-            "enqueue_copy_buffer",
-            &[
-                buffer_transfer_read(src_buf),
-                buffer_transfer_write(dst_buf),
-            ],
-            &[],
-            Box::new(
-                move |ctx: &mut DeviceContext, command_buffer: vk::CommandBuffer| {
-                    let src_buf = ctx.buffer::<T>(&src_buf);
-                    let dst_buf = ctx.buffer::<T>(&dst_buf);
-
-                    assert_eq!(src_buf.size, dst_buf.size);
-
-                    let regions = [vk::BufferCopy::default()
-                        .src_offset(0)
-                        .dst_offset(0)
-                        .size(src_buf.size as vk::DeviceSize)];
-
-                    unsafe {
-                        ctx.device.cmd_copy_buffer(
-                            command_buffer,
-                            src_buf.buffer,
-                            dst_buf.buffer,
-                            &regions,
-                        );
-                    }
-                },
-            ),
-        );
+    pub fn enqueue_copy<T, U: EnqueueCopyable<T>>(&mut self, src_buf: U, dst_buf: RgBuffer<T>) {
+        <U as EnqueueCopyable<T>>::enqueue_copy(self, src_buf, dst_buf);
     }
 
     pub fn enqueue_function<T>(
@@ -1367,6 +1286,114 @@ pub trait BitsToU32 {
 impl BitsToU32 for f32 {
     fn bits_to_u32(self) -> u32 {
         u32::from_le_bytes(self.to_le_bytes())
+    }
+}
+
+pub trait EnqueueCopyable<T> {
+    fn enqueue_copy(ctx: &mut DeviceContext, src_buf: Self, dst_buf: RgBuffer<T>);
+}
+
+impl<T> EnqueueCopyable<T> for RgBuffer<T>
+where
+    T: 'static,
+{
+    fn enqueue_copy(ctx: &mut DeviceContext, src_buf: Self, dst_buf: RgBuffer<T>) {
+        ctx.enqueue_pass(
+            "enqueue_copy_buffer",
+            &[
+                buffer_transfer_read(src_buf),
+                buffer_transfer_write(dst_buf),
+            ],
+            &[],
+            Box::new(
+                move |ctx: &mut DeviceContext, command_buffer: vk::CommandBuffer| {
+                    let src_buf = ctx.buffer::<T>(&src_buf);
+                    let dst_buf = ctx.buffer::<T>(&dst_buf);
+
+                    assert_eq!(src_buf.size, dst_buf.size);
+
+                    let regions = [vk::BufferCopy::default()
+                        .src_offset(0)
+                        .dst_offset(0)
+                        .size(src_buf.size as vk::DeviceSize)];
+
+                    unsafe {
+                        ctx.device.cmd_copy_buffer(
+                            command_buffer,
+                            src_buf.buffer,
+                            dst_buf.buffer,
+                            &regions,
+                        );
+                    }
+                },
+            ),
+        );
+    }
+}
+
+impl<T> EnqueueCopyable<T> for &[T]
+where
+    T: bytemuck::Pod,
+{
+    fn enqueue_copy(ctx: &mut DeviceContext, src_ptr: Self, dst_buf: RgBuffer<T>) {
+        let src_ptr = bytemuck::cast_slice(src_ptr);
+
+        let tmp_buf = ctx.enqueue_create_buffer_inner::<T>(
+            "staging_buffer",
+            src_ptr.len(),
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            &vk_mem::AllocationCreateInfo {
+                flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                usage: vk_mem::MemoryUsage::Auto,
+                ..Default::default()
+            },
+        );
+
+        let src_vec = src_ptr.to_vec();
+
+        ctx.enqueue_pass(
+            "enqueue_copy",
+            &[
+                buffer_transfer_read(tmp_buf),
+                buffer_transfer_write(dst_buf),
+            ],
+            &[],
+            Box::new(
+                move |ctx: &mut DeviceContext, command_buffer: vk::CommandBuffer| {
+                    let tmp_buf = ctx.buffer(&tmp_buf);
+                    let dst_buf = ctx.buffer(&dst_buf);
+
+                    let tmp_ptr = ctx.map_memory(tmp_buf.allocation, tmp_buf.size);
+                    tmp_ptr.copy_from_slice(&src_vec);
+                    ctx.unmap_memory(tmp_buf.allocation);
+
+                    assert_eq!(tmp_buf.size, dst_buf.size);
+
+                    let regions = [vk::BufferCopy::default()
+                        .src_offset(0)
+                        .dst_offset(0)
+                        .size(tmp_buf.size as vk::DeviceSize)];
+
+                    unsafe {
+                        ctx.device.cmd_copy_buffer(
+                            command_buffer,
+                            tmp_buf.buffer,
+                            dst_buf.buffer,
+                            &regions,
+                        );
+                    }
+                },
+            ),
+        );
+    }
+}
+
+impl<T, const N: usize> EnqueueCopyable<T> for &[T; N]
+where
+    T: bytemuck::Pod,
+{
+    fn enqueue_copy(ctx: &mut DeviceContext, src_ptr: Self, dst_buf: RgBuffer<T>) {
+        <&[T] as EnqueueCopyable<T>>::enqueue_copy(ctx, src_ptr.as_slice(), dst_buf);
     }
 }
 
