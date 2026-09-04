@@ -582,7 +582,7 @@ impl DeviceContext {
     }
 
     fn execute_inner(&mut self, present: Option<RgImage>) -> Result<(), String> {
-        // Resolve virtual to physical, allocating transients.
+        // Resolve virtual to physical buffers
         let mut transient_buffers = Vec::new();
         let mut physical_buffers = Vec::with_capacity(self.rg.virtual_buffers.len());
         for i in 0..self.rg.virtual_buffers.len() {
@@ -604,6 +604,7 @@ impl DeviceContext {
         }
         self.rg.physical_buffers = physical_buffers;
 
+        // Resolve virtual to physical images
         let mut physical_images = Vec::with_capacity(self.rg.virtual_images.len());
         for virtual_image in &self.rg.virtual_images {
             let Some(raw) = virtual_image.imported else {

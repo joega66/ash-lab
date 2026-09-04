@@ -1,12 +1,36 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, parse_macro_input};
+use syn::{Data, DeriveInput, Fields, ItemStruct, parse_macro_input};
 
-/// Derives `rhi::ShaderParametersTrait` for a struct whose fields all implement
-/// `rhi::Descriptor`, listing each field's name alongside its Slang
-/// descriptor kind in declaration order.
+#[proc_macro_attribute]
+pub fn push_constant(args: TokenStream, input: TokenStream) -> TokenStream {
+    if !args.is_empty() {
+        let args = proc_macro2::TokenStream::from(args);
+        return syn::Error::new_spanned(args, "push_constant takes no arguments")
+            .to_compile_error()
+            .into();
+    }
+
+    let input = parse_macro_input!(input as ItemStruct);
+
+    let expanded = quote! {
+        #[repr(C)]
+        #[derive(
+            Clone,
+            Copy,
+            ::rhi::bytemuck::Zeroable,
+            ::rhi::bytemuck::Pod,
+            ::rhi_reflect::ShaderType,
+        )]
+        #[bytemuck(crate = "::rhi::bytemuck")]
+        #input
+    };
+
+    TokenStream::from(expanded)
+}
+
 #[proc_macro_derive(ShaderParameters)]
-pub fn derive_descriptor_set(input: TokenStream) -> TokenStream {
+pub fn derive_shader_parameters(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = input.ident.clone();
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
@@ -24,9 +48,12 @@ pub fn derive_descriptor_set(input: TokenStream) -> TokenStream {
             }
         },
         _ => {
-            return syn::Error::new_spanned(&name, "ShaderParameters can only be derived for structs")
-                .to_compile_error()
-                .into();
+            return syn::Error::new_spanned(
+                &name,
+                "ShaderParameters can only be derived for structs",
+            )
+            .to_compile_error()
+            .into();
         }
     };
 
@@ -70,9 +97,6 @@ pub fn derive_descriptor_set(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-/// Derives `rhi::ShaderType` for a `#[repr(C)]` struct whose fields all
-/// implement `rhi::ShaderType`, reporting each field's real offset so the
-/// layout can be checked against slangc's reflection JSON.
 #[proc_macro_derive(ShaderType)]
 pub fn derive_shader_type(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -151,8 +175,6 @@ pub fn derive_shader_type(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-/// Derives `rhi::ShaderPermutationMatrix` for a struct whose fields all
-/// implement `rhi::ShaderPermutationDimension`, by enumerating the fields in declaration order.
 #[proc_macro_derive(ShaderPermutation)]
 pub fn derive_shader_permutation(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

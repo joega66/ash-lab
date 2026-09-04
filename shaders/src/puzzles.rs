@@ -1,4 +1,3 @@
-use bytemuck::{Pod, Zeroable};
 use rhi::*;
 use rhi_reflect::*;
 
@@ -9,8 +8,7 @@ use rhi_reflect::*;
             - Option B: Slang module specialization. (Fast - Slang has separate compilation for modules)
 */
 
-#[repr(C)]
-#[derive(Clone, Copy, Zeroable, Pod, ShaderType)]
+#[push_constant]
 pub struct Add10PushConstant {
     pub output: RWDeviceAddress<f32>,
     pub a: DeviceAddress<f32>,
@@ -19,8 +17,7 @@ pub struct Add10PushConstant {
 }
 kernel!(Add10, (), Add10PushConstant, "main", "add_10.slang");
 
-#[repr(C)]
-#[derive(Clone, Copy, Zeroable, Pod, ShaderType)]
+#[push_constant]
 pub struct AddPushConstant {
     pub output: RWDeviceAddress<f32>,
     pub a: DeviceAddress<f32>,

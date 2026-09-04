@@ -4,6 +4,9 @@ extern crate self as rhi;
 // from any downstream crate without that crate needing its own `inventory` dependency.
 pub use inventory;
 
+// Same reason: `#[push_constant]` derives `bytemuck::Pod` through this path.
+pub use bytemuck;
+
 mod device_context;
 pub use device_context::*;
 
