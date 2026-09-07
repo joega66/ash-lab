@@ -147,6 +147,22 @@ struct RgStates {
     images: Vec<RgImageState>,
 }
 
+#[macro_export]
+macro_rules! enqueue_function {
+    ($ctx:expr, $kernel:ty, permutation: $permutation:expr, parameters: $parameters:expr, $push_constant:expr, $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function::<$kernel>($permutation, $parameters, $push_constant, $grid_dim)
+    };
+    ($ctx:expr, $kernel:ty, permutation: $permutation:expr, $push_constant:expr, $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function::<$kernel>($permutation, (), $push_constant, $grid_dim)
+    };
+    ($ctx:expr, $kernel:ty, parameters: $parameters:expr, $push_constant:expr, $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function::<$kernel>((), $parameters, $push_constant, $grid_dim)
+    };
+    ($ctx:expr, $kernel:ty, $push_constant:expr, $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function::<$kernel>((), (), $push_constant, $grid_dim)
+    };
+}
+
 impl DeviceContext {
     pub fn register_buffer<T>(&mut self, name: &str, buffer: &DeviceBuffer<T>) -> RgBuffer<T> {
         let rg_buffer = RgBufferShadow {

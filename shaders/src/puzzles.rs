@@ -48,9 +48,9 @@ mod test {
         let a = ctx.enqueue_create_buffer("a", SIZE);
         ctx.enqueue_copy(a_host.as_slice(), a);
 
-        ctx.enqueue_function::<Add10>(
-            (),
-            (),
+        enqueue_function!(
+            ctx,
+            Add10,
             Add10PushConstant {
                 output: output.into(),
                 a: a.into(),
@@ -106,9 +106,9 @@ mod test {
         let b = ctx.enqueue_create_buffer("b", SIZE);
         ctx.enqueue_copy(b_host.as_slice(), b);
 
-        ctx.enqueue_function::<Add>(
-            (),
-            (),
+        enqueue_function!(
+            ctx,
+            Add,
             AddPushConstant {
                 output: output.into(),
                 a: a.into(),
