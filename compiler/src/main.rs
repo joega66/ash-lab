@@ -6,7 +6,7 @@ use std::unimplemented;
 
 extern crate shaders as _;
 
-/// Checks a kernel parameter's host type against the type slangc reflected for
+/// Checks a device function's parameter's host type against the type slangc reflected for
 /// the shader parameter it is bound to, failing the build on any disagreement.
 fn check_element_layout(parameter: &ShaderParameterType, reflected: &Type, shader: &Path) {
     let layout = parameter.layout.expect(&format!(
@@ -33,21 +33,41 @@ fn check_element_layout(parameter: &ShaderParameterType, reflected: &Type, shade
     }
 }
 
-/// Checks a kernel's `PushConstant` type against the `[vk::push_constant]`
+/// Checks a device function's `PushConstant` type against the `[vk::push_constant]`
 /// block the shader declared, or `None` when the shader declared none.
 fn check_push_constant_layout(
-    kernel: &dyn KernelTrait,
+    function: &dyn DynDeviceFunctionMeta,
     expected: Option<&Parameter>,
     shader: &Path,
 ) {
-    let host = kernel.push_constant_layout();
+    let host = function.push_constant_layout();
     let result = host.check_push_constant(expected.map(|parameter| &parameter.ty));
 
     if let Err(mismatches) = result {
         panic!(
             "the push constant of {}:{} does not match the host type:\n{}",
             shader.display(),
-            kernel.entry_point(),
+            function.entry_point(),
+            format_mismatches(&mismatches),
+        );
+    }
+}
+
+/// Check's a device function's `SpecConstant` type against the `[SpecializationConstant]` block
+/// the shader declared.
+fn check_spec_constant_layout(
+    function: &dyn DynDeviceFunctionMeta,
+    reflection: &ShaderReflection,
+    shader: &Path,
+) {
+    let host = function.spec_constant_layout();
+    let result = host.check_spec_constants(&reflection.specialization_constants());
+
+    if let Err(mismatches) = result {
+        panic!(
+            "the specialization constants of {}:{} do not match the host type:\n{}",
+            shader.display(),
+            function.entry_point(),
             format_mismatches(&mismatches),
         );
     }
@@ -117,14 +137,14 @@ fn main() {
         }
     }
 
-    let kernels = KernelRegistry::collect();
+    let functions = DeviceFunctionRegistry::collect();
 
-    for (_, kernel) in &kernels {
-        let shader = shaders.get(&kernel.shader_type()).unwrap();
+    for (_, function) in &functions {
+        let shader = shaders.get(&function.shader_type()).unwrap();
 
         let build_dir_path = shader.build_dir();
 
-        let parameter_types = kernel.parameter_types();
+        let parameter_types = function.parameter_types();
 
         for index in 0..shader.total_permutations() {
             if !shader.should_compile(index) {
@@ -135,15 +155,15 @@ fn main() {
             let spirv_file_path = build_dir_path.join(&spirv_file_name);
             let json_file_path = spirv_file_path.with_extension("json");
 
-            println!("Compiling kernel {}", spirv_file_name.display());
+            println!("Compiling function {}", spirv_file_name.display());
 
             let reflection = ShaderReflection::from_file(json_file_path);
 
             let entry_point = reflection
                 .entry_points
                 .iter()
-                .find(|x| x.name == kernel.entry_point())
-                .expect(&format!("missing entry point {}", kernel.entry_point()));
+                .find(|x| x.name == function.entry_point())
+                .expect(&format!("missing entry point {}", function.entry_point()));
 
             // The shader's `[vk::push_constant]` parameter, if it has one.
             let mut expected_push_constant = None;
@@ -167,6 +187,13 @@ fn main() {
                         "{} declares more than one push constant",
                         spirv_file_name.display(),
                     );
+                    continue;
+                }
+
+                // Specialization constants are module-scope, so they are
+                // checked against the whole reflection below rather than one
+                // entry point binding at a time.
+                if let Binding::SpecializationConstant { .. } = binding.binding {
                     continue;
                 }
 
@@ -233,7 +260,8 @@ fn main() {
                 }
             }
 
-            check_push_constant_layout(kernel.as_ref(), expected_push_constant, &spirv_file_name);
+            check_push_constant_layout(function.as_ref(), expected_push_constant, &spirv_file_name);
+            check_spec_constant_layout(function.as_ref(), &reflection, &spirv_file_name);
         }
     }
 }

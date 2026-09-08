@@ -234,7 +234,7 @@ macro_rules! shader_permutation_enum {
 ///     cascades: ShaderPermutationInt<CascadeCount, 1, 4>,
 /// }
 /// ```
-pub trait ShaderPermutationMatrix: Sized {
+pub trait ShaderPermutationMatrix: Sized + Copy + Clone {
     fn flatten(&self) -> usize;
 
     fn total_permutations() -> usize;

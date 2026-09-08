@@ -1,9 +1,12 @@
 use crate::AddressSlot;
+use crate::TypeLayout;
 use crate::permutation::*;
 use crate::shader_module::*;
+use crate::shader_type::ShaderType;
 use ash::vk::TaggedStructure;
 use ash::{Device, Entry, Instance, khr, vk};
 use bytemuck::AnyBitPattern;
+use bytemuck::Pod;
 use raw_window_handle::RawDisplayHandle;
 use raw_window_handle::RawWindowHandle;
 use std::fmt;
@@ -32,9 +35,6 @@ mod owned;
 pub use owned::*;
 
 use crate::shader_parameter::*;
-
-// ____________________________________________________________________________
-// DeviceContext
 
 pub struct DeviceContextCreateInfo {
     pub display_handle: Option<RawDisplayHandle>,
@@ -77,7 +77,8 @@ pub struct DeviceContext {
     set_allocators: HashMap<vk::DescriptorSetLayout, DescriptorSetAllocator>,
 
     shaders: HashMap<std::any::TypeId, ShaderModuleArray>,
-    kernels: HashMap<std::any::TypeId, PrecompiledKernelArray>,
+
+    functions: HashMap<std::any::TypeId, StaticDeviceFunctionArray>,
 
     rg: RgContext,
 
@@ -89,9 +90,6 @@ pub struct DeviceContext {
     #[allow(dead_code)]
     entry: Entry,
 }
-
-// ____________________________________________________________
-// DeviceContext, public
 
 impl DeviceContext {
     /// Returns a GPU device.
@@ -147,7 +145,8 @@ impl DeviceContext {
 
         let mut set_allocators = HashMap::new();
 
-        let kernels = unsafe { Self::create_kernels(&device, &mut set_allocators, &shaders) };
+        let functions =
+            unsafe { Self::create_device_functions(&device, &mut set_allocators, &shaders) };
 
         let swapchain_loader = khr::swapchain::Device::load(&instance, &device);
 
@@ -182,7 +181,7 @@ impl DeviceContext {
             mem_allocator,
             set_allocators,
             shaders,
-            kernels,
+            functions,
             rg: RgContext::new(),
             device: DeviceOwner::new(device),
             instance: InstanceOwner::new(instance),
@@ -241,40 +240,125 @@ impl DeviceContext {
         }
     }
 
-    pub fn map_memory(&self, mut allocation: vk_mem::Allocation, size: usize) -> &mut [u8] {
-        unsafe {
-            let raw = self
-                .mem_allocator
-                .map_memory(&mut allocation)
-                .expect("failed to map memory with VMA");
-            std::slice::from_raw_parts_mut(raw, size)
-        }
-    }
-
-    pub fn unmap_memory(&self, mut allocation: vk_mem::Allocation) {
-        unsafe {
-            self.mem_allocator.unmap_memory(&mut allocation);
-        }
-    }
-
-    pub fn get_shader<T: 'static + ShaderModule>(
+    /// Compiles the provided function for execution on this device.
+    pub fn compile_function<'a, T>(
         &self,
-        p: &<T as ShaderModule>::Permutations,
-    ) -> &vk::ShaderModule {
+        permutation: &<T::Shader as ShaderModule>::Permutations,
+        spec_constant: Option<<T as DeviceFunctionMeta>::SpecConstant>,
+    ) -> DeviceFunction<T>
+    where
+        T: DeviceFunctionMeta + 'static,
+        <T as DeviceFunctionMeta>::Shader: ShaderModule,
+        <T as DeviceFunctionMeta>::SpecConstant: ShaderType + Pod,
+    {
+        let function = self.get_function::<T>(&permutation);
+
+        let shader = self.get_shader::<T::Shader>(&permutation);
+
+        let entry_point_c_str = std::ffi::CString::new(T::new().entry_point()).unwrap();
+
+        let map_entries = match spec_constant {
+            Some(_) => {
+                let spec_constant_layout = <T as DeviceFunctionMeta>::SpecConstant::type_layout();
+                if let TypeLayout::Struct { fields, .. } = spec_constant_layout {
+                    let mut map_entries = Vec::new();
+                    for (field, constant_id) in std::iter::zip(&fields, 0..fields.len()) {
+                        map_entries.push(vk::SpecializationMapEntry {
+                            constant_id: constant_id as u32,
+                            offset: field.offset,
+                            size: field.ty.size() as usize,
+                        });
+                    }
+                    map_entries
+                } else {
+                    // This situation should be impossible
+                    panic!("expected a Struct, got a {:?}", spec_constant_layout)
+                }
+            }
+            None => Vec::new(),
+        };
+        let specialization_info = vk::SpecializationInfo::default()
+            .map_entries(&map_entries)
+            .data(
+                spec_constant
+                    .as_ref()
+                    .map_or(&[], |x| bytemuck::bytes_of(x)),
+            );
+
+        let pssci = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .module(*shader)
+            .name(entry_point_c_str.as_c_str())
+            .specialization_info(&specialization_info);
+
+        let cpci = vk::ComputePipelineCreateInfo::default()
+            .stage(pssci)
+            .layout(function.pipeline_layout);
+
+        let pipeline = unsafe {
+            self.device
+                .create_compute_pipelines(vk::PipelineCache::null(), &[cpci], None)
+                .expect("failed to create compute pipelines")[0]
+        };
+
+        DeviceFunction::<T> {
+            pipeline: pipeline,
+            permutation: permutation.clone(),
+            trash_tx: self.trash_tx.clone(),
+            _marker: PhantomData {},
+        }
+    }
+
+    pub fn get_shader<T>(
+        &self,
+        permutation: &<T as ShaderModule>::Permutations,
+    ) -> &vk::ShaderModule
+    where
+        T: ShaderModule + 'static,
+    {
+        // TypeId -> Permutation -> ShaderModule
         let k = TypeId::of::<T>();
-        let type_name = std::any::type_name::<T>();
         let shader_vec = self
             .shaders
             .get(&k)
-            .expect(&format!("missing shader module {type_name}"));
-        let index = p.flatten();
-        let shader = shader_vec
-            .0
-            .get(index)
-            .expect(&format!("missing shader module {type_name}:{index}"));
-        shader
+            .expect(&format!("missing shader {}", std::any::type_name::<T>()));
+        let permutation_index = permutation.flatten();
+        let shader = shader_vec.0.get(permutation_index).expect(&format!(
+            "missing shader permutation {}:{permutation_index}:{:?}",
+            std::any::type_name::<T>(),
+            permutation.defines()
+        ));
+        shader.as_ref().expect(&format!(
+            "missing shader permutation {}:{permutation_index}:{:?}",
+            std::any::type_name::<T>(),
+            permutation.defines()
+        ))
+    }
+
+    fn get_function<T>(
+        &self,
+        permutation: &<T::Shader as ShaderModule>::Permutations,
+    ) -> &StaticDeviceFunction
+    where
+        T: DeviceFunctionMeta + 'static,
+        <T as DeviceFunctionMeta>::Shader: ShaderModule,
+    {
+        // TypeId -> Permutation -> DeviceFunction
+        let function_type = std::any::TypeId::of::<T>();
+        let permutation_index = permutation.flatten();
+        let functions = self.functions.get(&function_type).expect(&format!(
+            "missing function {}:{permutation_index}:{:?}",
+            std::any::type_name::<T>(),
+            permutation.defines()
+        ));
+        let function = functions.permutations[permutation_index]
             .as_ref()
-            .expect(&format!("missing shader module {type_name}:{index}"))
+            .expect(&format!(
+                "missing function permutation {}:{permutation_index}:{:?}",
+                std::any::type_name::<T>(),
+                permutation.defines()
+            ));
+        function
     }
 
     /// Wait on every queue.
@@ -326,40 +410,7 @@ impl DeviceContext {
                 .expect("failed to submit");
         }
     }
-
-    /// Destroy resources that are no longer on GPU timeline.
-    fn garbage_collection(&mut self) {
-        let graphics_queue_time = unsafe {
-            self.device
-                .get_semaphore_counter_value(self.graphics_timeline.semaphore)
-        }
-        .unwrap();
-
-        self.trash.extend(
-            self.trash_rx
-                .try_iter()
-                .map(|t| (self.graphics_timeline.value, t)),
-        );
-
-        while self
-            .trash
-            .front()
-            .is_some_and(|(v, _)| *v <= graphics_queue_time)
-        {
-            let trash = self.trash.pop_front().unwrap();
-            Self::destroy(trash.1, &self.device, &mut self.mem_allocator);
-        }
-
-        let mut set_allocators = std::mem::take(&mut self.set_allocators);
-        for (_, set_allocator) in &mut set_allocators {
-            set_allocator.garbage_collection(&self, graphics_queue_time);
-        }
-        self.set_allocators = set_allocators;
-    }
 }
-
-// ____________________________________________________________
-// DeviceContext, private
 
 impl DeviceContext {
     unsafe fn create_instance(
@@ -539,7 +590,8 @@ impl DeviceContext {
             .buffer_device_address(true);
         let mut vulkan_13_features = vk::PhysicalDeviceVulkan13Features::default()
             .synchronization2(true)
-            .dynamic_rendering(true);
+            .dynamic_rendering(true)
+            .maintenance4(true);
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
             .push(&mut vulkan_11_features)
             .push(&mut vulkan_12_features)
@@ -778,7 +830,7 @@ impl DeviceContext {
     fn create_pipeline_layout<'a>(
         device: &Device,
         parameter_types: &[ShaderParameterType],
-        push_constant_size: u32,
+        push_constant_range_size: u32,
     ) -> (
         Vec<vk::DescriptorSetLayoutBinding<'a>>,
         vk::DescriptorSetLayout,
@@ -807,12 +859,12 @@ impl DeviceContext {
                 .create_descriptor_set_layout(&dslci, None)
                 .expect("failed to create descriptor set layout")
         };
-        let push_constant_ranges = if push_constant_size > 0 {
+        let push_constant_ranges = if push_constant_range_size > 0 {
             vec![
                 vk::PushConstantRange::default()
                     .stage_flags(vk::ShaderStageFlags::COMPUTE)
                     .offset(0)
-                    .size(push_constant_size),
+                    .size(push_constant_range_size),
             ]
         } else {
             Vec::new()
@@ -831,37 +883,37 @@ impl DeviceContext {
         (dslbs, set_layout, pipeline_layout)
     }
 
-    /// Returns all kernels designated for pre-compilation.
-    unsafe fn create_kernels(
+    /// Creates all device functions at load time.
+    unsafe fn create_device_functions(
         device: &Device,
         set_allocators: &mut HashMap<vk::DescriptorSetLayout, DescriptorSetAllocator>,
         shaders: &HashMap<std::any::TypeId, ShaderModuleArray>,
-    ) -> HashMap<std::any::TypeId, PrecompiledKernelArray> {
-        let mut kernels = HashMap::new();
+    ) -> HashMap<std::any::TypeId, StaticDeviceFunctionArray> {
+        let mut functions = HashMap::new();
 
-        for (k, kernel) in KernelRegistry::collect().iter() {
-            let entry_point_c_str = std::ffi::CString::new(kernel.entry_point()).unwrap();
+        for (k, function) in DeviceFunctionRegistry::collect().iter() {
+            let entry_point_c_str = std::ffi::CString::new(function.entry_point()).unwrap();
 
-            let shader_vec = shaders.get(&kernel.shader_type()).expect(&format!(
-                "kernel {:?} is missing shader {:?}",
+            let shader_vec = shaders.get(&function.shader_type()).expect(&format!(
+                "function {:?} is missing shader {:?}",
                 k,
-                kernel.shader_type()
+                function.shader_type()
             ));
 
             let (dslbs, set_layout, pipeline_layout) = Self::create_pipeline_layout(
                 device,
-                &kernel.parameter_types(),
-                kernel.push_constant_range_size(),
+                &function.parameter_types(),
+                function.push_constant_range_size(),
             );
 
             if !set_allocators.contains_key(&set_layout) {
                 set_allocators.insert(set_layout, DescriptorSetAllocator::make(&dslbs));
             }
 
-            let address_slots = Arc::new(kernel.push_constant_layout().address_slots());
+            let address_slots = Arc::new(function.push_constant_layout().address_slots());
 
-            let mut kernel_vec = Vec::new();
-            kernel_vec.resize(shader_vec.0.len(), Option::<PrecompiledKernel>::None);
+            let mut function_vec = Vec::new();
+            function_vec.resize(shader_vec.0.len(), Option::<StaticDeviceFunction>::None);
 
             for (i, shader) in shader_vec.0.iter().enumerate() {
                 let Some(shader) = shader.as_ref() else {
@@ -883,23 +935,23 @@ impl DeviceContext {
                         .expect("failed to create compute pipelines")[0]
                 };
 
-                kernel_vec[i] = Some(PrecompiledKernel {
+                function_vec[i] = Some(StaticDeviceFunction {
                     set_layout,
                     pipeline_layout,
                     pipeline,
                 });
             }
 
-            kernels.insert(
+            functions.insert(
                 *k,
-                PrecompiledKernelArray {
-                    permutations: kernel_vec,
+                StaticDeviceFunctionArray {
+                    permutations: function_vec,
                     address_slots: address_slots,
                 },
             );
         }
 
-        kernels
+        functions
     }
 
     /// Returns a new QueueTimeline.
@@ -965,7 +1017,7 @@ impl DeviceContext {
         }
     }
 
-    /// Wraps a VkImage created from an imported VkImage.
+    /// Wraps an externally created VkImage in a DeviceImage.
     fn create_image_imported(
         &mut self,
         image: vk::Image,
@@ -983,7 +1035,55 @@ impl DeviceContext {
         }
     }
 
-    /// Destroy a piece of Trash.
+    /// Maps this device memory to host memory for CPU access.
+    fn map_memory(&self, mut allocation: vk_mem::Allocation, size: usize) -> &mut [u8] {
+        unsafe {
+            let raw = self
+                .mem_allocator
+                .map_memory(&mut allocation)
+                .expect("failed to map memory with VMA");
+            std::slice::from_raw_parts_mut(raw, size)
+        }
+    }
+
+    /// Unmaps this device memory.
+    fn unmap_memory(&self, mut allocation: vk_mem::Allocation) {
+        unsafe {
+            self.mem_allocator.unmap_memory(&mut allocation);
+        }
+    }
+
+    /// Destroys resources that are no longer on GPU timeline.
+    fn garbage_collection(&mut self) {
+        let graphics_queue_time = unsafe {
+            self.device
+                .get_semaphore_counter_value(self.graphics_timeline.semaphore)
+        }
+        .unwrap();
+
+        self.trash.extend(
+            self.trash_rx
+                .try_iter()
+                .map(|t| (self.graphics_timeline.value, t)),
+        );
+
+        while self
+            .trash
+            .front()
+            .is_some_and(|(v, _)| *v <= graphics_queue_time)
+        {
+            let trash = self.trash.pop_front().unwrap();
+            Self::destroy(trash.1, &self.device, &mut self.mem_allocator);
+        }
+
+        let mut set_allocators = std::mem::take(&mut self.set_allocators);
+        for (_, set_allocator) in &mut set_allocators {
+            set_allocator.garbage_collection(&self, graphics_queue_time);
+        }
+        self.set_allocators = set_allocators;
+    }
+
+    /// Destroys a piece of Trash.
     fn destroy(trash: Trash, device: &Device, mem_allocator: &mut vk_mem::Allocator) {
         match trash {
             Trash::Buffer((buffer, mut allocation)) => unsafe {
@@ -1020,16 +1120,16 @@ impl Drop for DeviceContext {
             }
         }
 
-        // --- Destroy kernel resources ---
-        for (_, kernel_vec) in &self.kernels {
-            for kernel in &kernel_vec.permutations {
-                match kernel {
-                    Some(kernel) => unsafe {
+        // --- Destroy device function resources ---
+        for (_, function_vec) in &self.functions {
+            for function in &function_vec.permutations {
+                match function {
+                    Some(function) => unsafe {
                         self.device
-                            .destroy_descriptor_set_layout(kernel.set_layout, None);
+                            .destroy_descriptor_set_layout(function.set_layout, None);
                         self.device
-                            .destroy_pipeline_layout(kernel.pipeline_layout, None);
-                        self.device.destroy_pipeline(kernel.pipeline, None);
+                            .destroy_pipeline_layout(function.pipeline_layout, None);
+                        self.device.destroy_pipeline(function.pipeline, None);
                     },
                     None => {}
                 }
@@ -1076,23 +1176,53 @@ impl Drop for DeviceContext {
     }
 }
 
-/// Every permutation of a shader module.
+/// Every shader's VkShaderModule permutation.
 struct ShaderModuleArray(Vec<Option<vk::ShaderModule>>);
 
-/// A kernel compiled ahead-of-time.
+/// A device function's compute pipeline derived at load time from shader reflection.
 #[derive(Clone)]
-struct PrecompiledKernel {
+struct StaticDeviceFunction {
     set_layout: vk::DescriptorSetLayout, // Set layout #0
     pipeline_layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
 }
 
-struct PrecompiledKernelArray {
-    /// Every permutation of the kernel.
-    permutations: Vec<Option<PrecompiledKernel>>,
+/// A device function's collection of compute pipelines, one for each permutation.
+struct StaticDeviceFunctionArray {
+    /// Every permutation of the function.
+    permutations: Vec<Option<StaticDeviceFunction>>,
 
-    /// DeviceAddress slots in the kernel's PushConstant blob.
+    /// DeviceAddress slots in the function's PushConstant blob.
     address_slots: Arc<Vec<AddressSlot>>,
+}
+
+/// A compute pipeline created at runtime.
+/// Must be a specialization of a static compute pipeline, since we currently don't
+/// allow runtime Slang shader compilation.
+pub struct DeviceFunction<T>
+where
+    T: DeviceFunctionMeta + 'static,
+    <T as DeviceFunctionMeta>::Shader: ShaderModule,
+{
+    pipeline: vk::Pipeline,
+    permutation: <<T as DeviceFunctionMeta>::Shader as ShaderModule>::Permutations,
+    trash_tx: Sender<Trash>,
+    _marker: PhantomData<T>,
+}
+
+impl<T> Drop for DeviceFunction<T>
+where
+    T: DeviceFunctionMeta + 'static,
+    <T as DeviceFunctionMeta>::Shader: ShaderModule,
+{
+    fn drop(&mut self) {
+        let pipeline = self.pipeline;
+        let _ = self
+            .trash_tx
+            .send(Trash::Generic(Box::new(move |device| unsafe {
+                device.destroy_pipeline(pipeline, None);
+            })));
+    }
 }
 
 struct QueueTimeline {

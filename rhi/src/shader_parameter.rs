@@ -214,12 +214,12 @@ pub struct ShaderParameter {
     pub buffer: AnyRgBuffer,
 }
 
-pub trait ShaderParametersTrait: Sized {
+pub trait DynShaderParameters: Sized {
     fn parameter_types() -> Vec<ShaderParameterType>;
     fn parameters(&self) -> Vec<ShaderParameter>;
 }
 
-impl ShaderParametersTrait for () {
+impl DynShaderParameters for () {
     fn parameter_types() -> Vec<ShaderParameterType> {
         Vec::new()
     }

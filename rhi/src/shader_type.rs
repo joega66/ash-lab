@@ -1,4 +1,6 @@
-use crate::{Binding, Type};
+use bytemuck::Pod;
+
+use crate::{Binding, SpecializationConstant, Type};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScalarKind {
@@ -193,13 +195,13 @@ impl TypeLayout {
             (TypeLayout::Unit, None) => Ok(()),
             (TypeLayout::Unit, Some(_)) => Err(vec![mismatch(
                 &self.root_path(),
-                "the shader declares a push constant block, but the kernel's PushConstant type \
+                "the shader declares a push constant block, but the function's PushConstant type \
                  is `()`"
                     .to_string(),
             )]),
             (_, None) => Err(vec![mismatch(
                 &self.root_path(),
-                "the kernel declares a PushConstant, but the shader has no \
+                "the function declares a PushConstant, but the shader has no \
                  [vk::push_constant] parameter"
                     .to_string(),
             )]),
@@ -241,6 +243,99 @@ impl TypeLayout {
                     });
                 }
             }
+        }
+
+        finish(mismatches)
+    }
+
+    pub fn check_spec_constants(
+        &self,
+        reflected: &[SpecializationConstant],
+    ) -> Result<(), Vec<LayoutMismatch>> {
+        let path = self.root_path();
+
+        let fields = match self {
+            TypeLayout::Unit => {
+                if reflected.is_empty() {
+                    return Ok(());
+                }
+                return Err(vec![mismatch(
+                    &path,
+                    format!(
+                        "the shader declares {} specialization constant(s) [{}], but the \
+                         function's SpecConstant type is `()`",
+                        reflected.len(),
+                        reflected_names(reflected),
+                    ),
+                )]);
+            }
+            TypeLayout::Struct { fields, .. } => fields,
+            _ => {
+                return Err(vec![mismatch(
+                    &path,
+                    format!(
+                        "SpecConstant is a {}; it has to be a struct whose fields are the \
+                         shader's specialization constants, or `()`",
+                        self.kind_name()
+                    ),
+                )]);
+            }
+        };
+
+        if reflected.is_empty() && !fields.is_empty() {
+            return Err(vec![mismatch(
+                &path,
+                format!(
+                    "the function declares {} specialization constant(s), but the shader has no \
+                     [SpecializationConstant] declarations",
+                    fields.len()
+                ),
+            )]);
+        }
+
+        let mut mismatches = Vec::new();
+
+        if fields.len() != reflected.len() {
+            let host_names: Vec<&str> = fields.iter().map(|field| field.name).collect();
+            mismatches.push(mismatch(
+                &path,
+                format!(
+                    "host struct has {} fields [{}], shader declares {} specialization \
+                     constant(s) [{}]",
+                    fields.len(),
+                    host_names.join(", "),
+                    reflected.len(),
+                    reflected_names(reflected),
+                ),
+            ));
+        }
+
+        for (position, (field, constant)) in fields.iter().zip(reflected).enumerate() {
+            let field_path = format!("{path}.{}", field.name);
+
+            if field.name != constant.name() {
+                mismatches.push(mismatch(
+                    &field_path,
+                    format!(
+                        "shader specialization constant at this position is named `{}`",
+                        constant.name()
+                    ),
+                ));
+            }
+
+            if constant.index != position as u32 {
+                mismatches.push(mismatch(
+                    &field_path,
+                    format!(
+                        "host field is written under constant id {position}, but the shader gave \
+                         `{}` constant id {}",
+                        constant.name(),
+                        constant.index,
+                    ),
+                ));
+            }
+
+            check_type(&field.ty, &constant.parameter.ty, &field_path, &mut mismatches);
         }
 
         finish(mismatches)
@@ -314,6 +409,14 @@ fn reflected_kind_name(reflected: &Type) -> &'static str {
         Type::Pointer { .. } => "a pointer",
         Type::SamplerState => "a sampler state",
     }
+}
+
+fn reflected_names(reflected: &[SpecializationConstant]) -> String {
+    reflected
+        .iter()
+        .map(|constant| constant.name())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn mismatch(path: &str, message: String) -> LayoutMismatch {
@@ -539,7 +642,7 @@ pub trait ShaderType {
     }
 }
 
-/// The empty shader type, for a kernel that has no push constant.
+/// The empty shader type, for a function that has no push constant.
 impl ShaderType for () {
     fn type_layout() -> TypeLayout {
         TypeLayout::Unit

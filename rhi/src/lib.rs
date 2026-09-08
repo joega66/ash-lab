@@ -35,7 +35,7 @@ pub const fn div_round_up(a: usize, b: usize) -> usize {
     (a + b - 1) / b
 }
 
-/// Returns the number of work groups to launch for a 1D kernel with the default work group size.
+/// Returns the number of work groups to launch for a 1D compute shader with the default grid size.
 pub const fn grid_dim_1d(numel: usize) -> UInt3 {
     let grid_dim_x = div_round_up(numel, 64) as u32;
     UInt3::new(grid_dim_x, 1, 1)

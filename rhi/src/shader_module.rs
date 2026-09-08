@@ -1,8 +1,7 @@
 use crate::{
-    ShaderParameterType, ShaderParametersTrait, ShaderPermutationMatrix, ShaderType, TypeLayout,
+    DynShaderParameters, ShaderParameterType, ShaderPermutationMatrix, ShaderType, TypeLayout,
 };
 use ash::Device;
-use bytemuck::Pod;
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,7 +27,7 @@ fn workspace_target_dir(start: &Path) -> PathBuf {
 /// Example usage:
 /// shader!(MyShader, "MyShader.slang")
 /// shader!(MyShader, "MyShader.slang", MyShaderPermutations)
-pub trait ShaderModuleTrait {
+pub trait DynShaderModule {
     fn manifest_dir(&self) -> &'static str;
 
     fn relative_path(&self) -> &'static str;
@@ -79,7 +78,7 @@ pub trait ShaderModuleTrait {
     }
 }
 
-pub trait ShaderModule: ShaderModuleTrait {
+pub trait ShaderModule: DynShaderModule {
     type Permutations: ShaderPermutationMatrix;
 
     fn total_permutations(&self) -> usize {
@@ -104,7 +103,7 @@ macro_rules! shader {
             type Permutations = $permutations;
         }
 
-        impl $crate::ShaderModuleTrait for $ty {
+        impl $crate::DynShaderModule for $ty {
             fn manifest_dir(&self) -> &'static str {
                 env!("CARGO_MANIFEST_DIR")
             }
@@ -122,7 +121,7 @@ macro_rules! shader {
         $crate::inventory::submit! {
             $crate::ShaderModuleRegistry {
                 type_id: std::any::TypeId::of::<$ty>(),
-                instantiate: || -> Box<dyn $crate::ShaderModuleTrait> { Box::new($ty {}) },
+                instantiate: || -> Box<dyn $crate::DynShaderModule> { Box::new($ty {}) },
             }
         }
     };
@@ -130,13 +129,13 @@ macro_rules! shader {
 
 pub struct ShaderModuleRegistry {
     pub type_id: TypeId,
-    pub instantiate: fn() -> Box<dyn ShaderModuleTrait>,
+    pub instantiate: fn() -> Box<dyn DynShaderModule>,
 }
 
 inventory::collect!(ShaderModuleRegistry);
 
 impl ShaderModuleRegistry {
-    pub fn collect() -> HashMap<TypeId, Box<dyn ShaderModuleTrait>> {
+    pub fn collect() -> HashMap<TypeId, Box<dyn DynShaderModule>> {
         let map = inventory::iter::<ShaderModuleRegistry>()
             .map(|registration| (registration.type_id, (registration.instantiate)()))
             .collect();
@@ -144,20 +143,26 @@ impl ShaderModuleRegistry {
     }
 }
 
-pub trait KernelTrait {
+pub trait DynDeviceFunctionMeta {
+    /// `new` is used for accessing the vtable.
+    fn new() -> Self
+    where
+        Self: Sized;
     fn shader_type(&self) -> std::any::TypeId;
     fn parameter_types(&self) -> Vec<ShaderParameterType>;
     fn push_constant_layout(&self) -> TypeLayout;
     fn push_constant_range_size(&self) -> u32 {
         self.push_constant_layout().size().next_multiple_of(4)
     }
+    fn spec_constant_layout(&self) -> TypeLayout;
     fn entry_point(&self) -> &'static str;
 }
 
-pub trait Kernel: KernelTrait {
-    type Shader: ShaderModuleTrait + 'static;
-    type Params: ShaderParametersTrait;
-    type PushConstant: ShaderType + Pod;
+pub trait DeviceFunctionMeta: DynDeviceFunctionMeta {
+    type Shader: DynShaderModule + 'static;
+    type Params: DynShaderParameters;
+    type PushConstant: ShaderType;
+    type SpecConstant: ShaderType;
 
     fn shader_type(&self) -> std::any::TypeId {
         std::any::TypeId::of::<Self::Shader>()
@@ -170,28 +175,41 @@ pub trait Kernel: KernelTrait {
     fn push_constant_layout(&self) -> TypeLayout {
         Self::PushConstant::type_layout()
     }
+
+    fn spec_constant_layout(&self) -> TypeLayout {
+        Self::SpecConstant::type_layout()
+    }
 }
 
 #[macro_export]
-macro_rules! kernel {
-    ($shader_ty:ident, $params_ty:ty, $push_constant_ty:ty, $entry_point:expr, $path:expr) => {
+macro_rules! function {
+    ($shader_ty:ident, $params_ty:ty, $push_constant_ty:ty, $spec_constant:ty, $entry_point:expr, $path:expr) => {
         shader!($shader_ty, $path);
-        impl $crate::Kernel for $shader_ty {
+        impl $crate::DeviceFunctionMeta for $shader_ty {
             type Shader = $shader_ty;
             type Params = $params_ty;
             type PushConstant = $push_constant_ty;
+            type SpecConstant = $spec_constant;
         }
-        impl $crate::KernelTrait for $shader_ty {
+        impl $crate::DynDeviceFunctionMeta for $shader_ty {
+            fn new() -> Self {
+                Self {}
+            }
+
             fn shader_type(&self) -> std::any::TypeId {
-                $crate::Kernel::shader_type(self)
+                $crate::DeviceFunctionMeta::shader_type(self)
             }
 
             fn parameter_types(&self) -> Vec<$crate::ShaderParameterType> {
-                $crate::Kernel::parameter_types(self)
+                $crate::DeviceFunctionMeta::parameter_types(self)
             }
 
             fn push_constant_layout(&self) -> $crate::TypeLayout {
-                $crate::Kernel::push_constant_layout(self)
+                $crate::DeviceFunctionMeta::push_constant_layout(self)
+            }
+
+            fn spec_constant_layout(&self) -> $crate::TypeLayout {
+                $crate::DeviceFunctionMeta::spec_constant_layout(self)
             }
 
             fn entry_point(&self) -> &'static str {
@@ -200,9 +218,9 @@ macro_rules! kernel {
         }
         $crate::inventory::submit! {
             {
-                $crate::KernelRegistry {
-                    kernel_type: std::any::TypeId::of::<$shader_ty>(),
-                    instantiate: || -> Box<dyn $crate::KernelTrait> { Box::new($shader_ty {}) },
+                $crate::DeviceFunctionRegistry {
+                    function_type: std::any::TypeId::of::<$shader_ty>(),
+                    instantiate: || -> Box<dyn $crate::DynDeviceFunctionMeta> { Box::new($shader_ty {}) },
                 }
             }
         }
@@ -210,17 +228,17 @@ macro_rules! kernel {
 }
 
 #[derive(Clone)]
-pub struct KernelRegistry {
-    pub kernel_type: TypeId,
-    pub instantiate: fn() -> Box<dyn KernelTrait>,
+pub struct DeviceFunctionRegistry {
+    pub function_type: TypeId,
+    pub instantiate: fn() -> Box<dyn DynDeviceFunctionMeta>,
 }
 
-inventory::collect!(KernelRegistry);
+inventory::collect!(DeviceFunctionRegistry);
 
-impl KernelRegistry {
-    pub fn collect() -> HashMap<TypeId, Box<dyn KernelTrait>> {
-        let map = inventory::iter::<KernelRegistry>()
-            .map(|registration| (registration.kernel_type, (registration.instantiate)()))
+impl DeviceFunctionRegistry {
+    pub fn collect() -> HashMap<TypeId, Box<dyn DynDeviceFunctionMeta>> {
+        let map = inventory::iter::<DeviceFunctionRegistry>()
+            .map(|registration| (registration.function_type, (registration.instantiate)()))
             .collect();
         map
     }

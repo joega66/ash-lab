@@ -19,6 +19,33 @@ impl ShaderReflection {
         serde_json::from_slice(&bytes)
             .unwrap_or_else(|e| panic!("failed to parse reflection JSON {}: {e}", path.display()))
     }
+
+    pub fn specialization_constants(&self) -> Vec<SpecializationConstant<'_>> {
+        let mut constants: Vec<_> = self
+            .parameters
+            .iter()
+            .filter_map(|parameter| match parameter.binding {
+                Some(Binding::SpecializationConstant { index }) => {
+                    Some(SpecializationConstant { index, parameter })
+                }
+                _ => None,
+            })
+            .collect();
+        constants.sort_by_key(|constant| constant.index);
+        constants
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SpecializationConstant<'a> {
+    pub index: u32,
+    pub parameter: &'a Parameter,
+}
+
+impl<'a> SpecializationConstant<'a> {
+    pub fn name(&self) -> &'a str {
+        self.parameter.name.as_deref().unwrap_or("<unnamed>")
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -58,6 +85,9 @@ pub struct EntryPointBinding {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Binding {
+    SpecializationConstant {
+        index: u32,
+    },
     DescriptorTableSlot {
         index: u32,
     },

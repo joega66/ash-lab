@@ -149,17 +149,24 @@ struct RgStates {
 
 #[macro_export]
 macro_rules! enqueue_function {
-    ($ctx:expr, $kernel:ty, permutation: $permutation:expr, parameters: $parameters:expr, $push_constant:expr, $grid_dim:expr $(,)?) => {
-        $ctx.enqueue_function::<$kernel>($permutation, $parameters, $push_constant, $grid_dim)
+    ($ctx:expr, function: $function:expr, parameters: $parameters:expr, push_constant: $push_constant:expr, grid_dim: $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function_object($function, $parameters, $push_constant, $grid_dim)
     };
-    ($ctx:expr, $kernel:ty, permutation: $permutation:expr, $push_constant:expr, $grid_dim:expr $(,)?) => {
-        $ctx.enqueue_function::<$kernel>($permutation, (), $push_constant, $grid_dim)
+    ($ctx:expr, function: $function:expr, push_constant: $push_constant:expr, grid_dim: $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function_object($function, (), $push_constant, $grid_dim)
     };
-    ($ctx:expr, $kernel:ty, parameters: $parameters:expr, $push_constant:expr, $grid_dim:expr $(,)?) => {
-        $ctx.enqueue_function::<$kernel>((), $parameters, $push_constant, $grid_dim)
+
+    ($ctx:expr, $function:ty, permutation: $permutation:expr, parameters: $parameters:expr, push_constant: $push_constant:expr, grid_dim: $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function::<$function>($permutation, $parameters, $push_constant, $grid_dim)
     };
-    ($ctx:expr, $kernel:ty, $push_constant:expr, $grid_dim:expr $(,)?) => {
-        $ctx.enqueue_function::<$kernel>((), (), $push_constant, $grid_dim)
+    ($ctx:expr, $function:ty, permutation: $permutation:expr, push_constant: $push_constant:expr, grid_dim: $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function::<$function>($permutation, (), $push_constant, $grid_dim)
+    };
+    ($ctx:expr, $function:ty, parameters: $parameters:expr, push_constant: $push_constant:expr, grid_dim: $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function::<$function>(&(), $parameters, $push_constant, $grid_dim)
+    };
+    ($ctx:expr, $function:ty, push_constant: $push_constant:expr, grid_dim: $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function::<$function>(&(), (), $push_constant, $grid_dim)
     };
 }
 
@@ -314,17 +321,50 @@ impl DeviceContext {
 
     pub fn enqueue_function<T>(
         &mut self,
-        permutation: <T::Shader as ShaderModule>::Permutations,
-        parameters: <T as Kernel>::Params,
-        push_constant: <T as Kernel>::PushConstant,
+        permutation: &<T::Shader as ShaderModule>::Permutations,
+        parameters: <T as DeviceFunctionMeta>::Params,
+        push_constant: <T as DeviceFunctionMeta>::PushConstant,
         grid_dim: UInt3,
     ) where
-        T: Kernel + 'static,
-        <T as Kernel>::Shader: ShaderModule,
+        T: DeviceFunctionMeta + 'static,
+        <T as DeviceFunctionMeta>::Shader: ShaderModule,
+        <T as DeviceFunctionMeta>::PushConstant: ShaderType + Pod,
     {
-        // Get the kernel's type for hash 'n cache.
-        let kernel_type = std::any::TypeId::of::<T>();
+        self.enqueue_function_inner::<T>(None, &permutation, parameters, push_constant, grid_dim);
+    }
 
+    pub fn enqueue_function_object<T>(
+        &mut self,
+        function: &DeviceFunction<T>,
+        parameters: <T as DeviceFunctionMeta>::Params,
+        push_constant: <T as DeviceFunctionMeta>::PushConstant,
+        grid_dim: UInt3,
+    ) where
+        T: DeviceFunctionMeta + 'static,
+        <T as DeviceFunctionMeta>::Shader: ShaderModule,
+        <T as DeviceFunctionMeta>::PushConstant: ShaderType + Pod,
+    {
+        self.enqueue_function_inner::<T>(
+            Some(function.pipeline),
+            &function.permutation,
+            parameters,
+            push_constant,
+            grid_dim,
+        );
+    }
+
+    fn enqueue_function_inner<T>(
+        &mut self,
+        pipeline: Option<vk::Pipeline>,
+        permutation: &<T::Shader as ShaderModule>::Permutations,
+        parameters: <T as DeviceFunctionMeta>::Params,
+        push_constant: <T as DeviceFunctionMeta>::PushConstant,
+        grid_dim: UInt3,
+    ) where
+        T: DeviceFunctionMeta + 'static,
+        <T as DeviceFunctionMeta>::Shader: ShaderModule,
+        <T as DeviceFunctionMeta>::PushConstant: ShaderType + Pod,
+    {
         // Get the ShaderParameters as a list.
         let parameters = parameters.parameters();
 
@@ -347,26 +387,32 @@ impl DeviceContext {
             })
             .collect();
 
-        // Multi-dim permutation -> flat index.
-        let permutation_idx = permutation.flatten();
-
-        // Lookup the kernel from the flat index.
-        let kernels = self.kernels.get(&kernel_type).expect(&format!(
-            "{}:{} wasn't ahead-of-time compiled",
+        let function_type = std::any::TypeId::of::<T>();
+        let permutation_index = permutation.flatten();
+        let functions = self.functions.get(&function_type).expect(&format!(
+            "missing function {}:{permutation_index}:{:?}",
             std::any::type_name::<T>(),
-            permutation_idx
+            permutation.defines()
         ));
-        let kernel = kernels.permutations[permutation_idx]
+        let function = functions.permutations[permutation_index]
             .as_ref()
             .expect(&format!(
-                "{}:{} wasn't ahead-of-time compiled",
+                "missing function permutation {}:{permutation_index}:{:?}",
                 std::any::type_name::<T>(),
-                permutation_idx
-            ))
-            .clone();
+                permutation.defines()
+            ));
+        let pipeline = match pipeline {
+            Some(pipeline) => pipeline,
+            None => function.pipeline,
+        };
+        let StaticDeviceFunction {
+            set_layout,
+            pipeline_layout,
+            ..
+        } = function.clone();
 
         // Insert transitions for DeviceAddress in the push constant blob.
-        let address_slots = kernels.address_slots.clone();
+        let address_slots = functions.address_slots.clone();
         transitions.extend(bda::address_transitions(
             &address_slots,
             &push_constant_bytes,
@@ -374,7 +420,7 @@ impl DeviceContext {
             stage,
         ));
 
-        // Enqueue the kernel.
+        // Enqueue the function.
         self.enqueue_pass(
             std::any::type_name::<T>(),
             &transitions,
@@ -410,9 +456,9 @@ impl DeviceContext {
 
                         // TODO: Batch all descriptor set allocations + updates in graph preamble
                         let mut set_allocators = std::mem::take(&mut ctx.set_allocators);
-                        let set_allocator = set_allocators.get_mut(&kernel.set_layout).unwrap();
+                        let set_allocator = set_allocators.get_mut(&set_layout).unwrap();
                         let result =
-                            set_allocator.allocate_descriptor_set(ctx, kernel.set_layout, buffers);
+                            set_allocator.allocate_descriptor_set(ctx, set_layout, buffers);
                         ctx.set_allocators = set_allocators;
 
                         match result {
@@ -460,13 +506,13 @@ impl DeviceContext {
                         ctx.device.cmd_bind_pipeline(
                             command_buffer,
                             vk::PipelineBindPoint::COMPUTE,
-                            kernel.pipeline,
+                            pipeline,
                         );
                         if let Some(set) = set {
                             ctx.device.cmd_bind_descriptor_sets(
                                 command_buffer,
                                 vk::PipelineBindPoint::COMPUTE,
-                                kernel.pipeline_layout,
+                                pipeline_layout,
                                 0,
                                 &[set],
                                 &[],
@@ -475,7 +521,7 @@ impl DeviceContext {
                         if !push_constant_bytes.is_empty() {
                             ctx.device.cmd_push_constants(
                                 command_buffer,
-                                kernel.pipeline_layout,
+                                pipeline_layout,
                                 vk::ShaderStageFlags::COMPUTE,
                                 0,
                                 &push_constant_bytes,
