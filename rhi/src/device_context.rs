@@ -1,6 +1,6 @@
 use crate::AddressSlot;
 use crate::TypeLayout;
-use crate::permutation::*;
+use crate::shader_permutation::*;
 use crate::shader_module::*;
 use crate::shader_type::ShaderType;
 use ash::vk::TaggedStructure;

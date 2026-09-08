@@ -10,8 +10,8 @@ pub use bytemuck;
 mod device_context;
 pub use device_context::*;
 
-mod permutation;
-pub use permutation::*;
+mod shader_permutation;
+pub use shader_permutation::*;
 
 mod shader_module;
 pub use shader_module::*;
