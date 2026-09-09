@@ -149,24 +149,24 @@ struct RgStates {
 
 #[macro_export]
 macro_rules! enqueue_function {
-    ($ctx:expr, function: $function:expr, parameters: $parameters:expr, push_constant: $push_constant:expr, grid_dim: $grid_dim:expr $(,)?) => {
-        $ctx.enqueue_function_object($function, $parameters, $push_constant, $grid_dim)
+    ($ctx:expr, func: $func:expr, params: $params:expr, push: $push:expr, grid_dim: $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function_object($func, $params, $push, $grid_dim)
     };
-    ($ctx:expr, function: $function:expr, push_constant: $push_constant:expr, grid_dim: $grid_dim:expr $(,)?) => {
-        $ctx.enqueue_function_object($function, (), $push_constant, $grid_dim)
+    ($ctx:expr, func: $func:expr, push: $push:expr, grid_dim: $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function_object($func, (), $push, $grid_dim)
     };
 
-    ($ctx:expr, $function:ty, permutation: $permutation:expr, parameters: $parameters:expr, push_constant: $push_constant:expr, grid_dim: $grid_dim:expr $(,)?) => {
-        $ctx.enqueue_function::<$function>($permutation, $parameters, $push_constant, $grid_dim)
+    ($ctx:expr, $func:ty, permutation: $permutation:expr, params: $params:expr, push: $push:expr, grid_dim: $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function::<$func>($permutation, $params, $push, $grid_dim)
     };
-    ($ctx:expr, $function:ty, permutation: $permutation:expr, push_constant: $push_constant:expr, grid_dim: $grid_dim:expr $(,)?) => {
-        $ctx.enqueue_function::<$function>($permutation, (), $push_constant, $grid_dim)
+    ($ctx:expr, $func:ty, permutation: $permutation:expr, push: $push:expr, grid_dim: $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function::<$func>($permutation, (), $push, $grid_dim)
     };
-    ($ctx:expr, $function:ty, parameters: $parameters:expr, push_constant: $push_constant:expr, grid_dim: $grid_dim:expr $(,)?) => {
-        $ctx.enqueue_function::<$function>(&(), $parameters, $push_constant, $grid_dim)
+    ($ctx:expr, $func:ty, params: $params:expr, push: $push:expr, grid_dim: $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function::<$func>(&(), $params, $push, $grid_dim)
     };
-    ($ctx:expr, $function:ty, push_constant: $push_constant:expr, grid_dim: $grid_dim:expr $(,)?) => {
-        $ctx.enqueue_function::<$function>(&(), (), $push_constant, $grid_dim)
+    ($ctx:expr, $func:ty, push: $push:expr, grid_dim: $grid_dim:expr $(,)?) => {
+        $ctx.enqueue_function::<$func>(&(), (), $push, $grid_dim)
     };
 }
 

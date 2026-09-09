@@ -3,12 +3,12 @@ use quote::quote;
 use syn::{Data, DeriveInput, Fields, ItemStruct, parse_macro_input};
 
 #[proc_macro_attribute]
-pub fn push_constant(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn push(args: TokenStream, input: TokenStream) -> TokenStream {
     shader_type(args, input)
 }
 
 #[proc_macro_attribute]
-pub fn spec_constant(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn spec(args: TokenStream, input: TokenStream) -> TokenStream {
     shader_type(args, input)
 }
 

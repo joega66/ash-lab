@@ -1,41 +1,39 @@
 use rhi::*;
 use rhi_reflect::*;
 
-#[push_constant]
-pub struct Add10PushConstant {
+#[push]
+pub struct Add10Push {
     pub output: RWDeviceAddress<f32>,
     pub a: DeviceAddress<f32>,
 }
-#[spec_constant]
-pub struct Add10SpecConstant {
+#[spec]
+pub struct Add10Spec {
     pub grid_size_x: u32,
 }
 function!(
     Add10,
-    (),
-    Add10PushConstant,
-    Add10SpecConstant,
+    push: Add10Push,
+    spec: Add10Spec,
     "main",
-    "add_10.slang"
+    "add_10.slang",
 );
 
-#[push_constant]
-pub struct AddPushConstant {
+#[push]
+pub struct AddPush {
     pub output: RWDeviceAddress<f32>,
     pub a: DeviceAddress<f32>,
     pub b: DeviceAddress<f32>,
 }
-#[spec_constant]
-pub struct AddSpecConstant {
+#[spec]
+pub struct AddSpec {
     pub grid_size_x: u32,
 }
 function!(
     Add,
-    (),
-    AddPushConstant,
-    AddSpecConstant,
+    push: AddPush,
+    spec: AddSpec,
     "main",
-    "add.slang"
+    "add.slang",
 );
 
 #[cfg(test)]
@@ -61,15 +59,15 @@ mod test {
 
         let add_10 = ctx.compile_function::<Add10>(
             &(),
-            Some(Add10SpecConstant {
+            Some(Add10Spec {
                 grid_size_x: SIZE as u32,
             }),
         );
 
         enqueue_function!(
             ctx,
-            function: &add_10,
-            push_constant: Add10PushConstant {
+            func: &add_10,
+            push: Add10Push {
                 output: output.into(),
                 a: a.into(),
             },
@@ -124,15 +122,15 @@ mod test {
 
         let add = ctx.compile_function::<Add>(
             &(),
-            Some(AddSpecConstant {
+            Some(AddSpec {
                 grid_size_x: SIZE as u32,
             }),
         );
 
         enqueue_function!(
             ctx,
-            function: &add,
-            push_constant: AddPushConstant {
+            func: &add,
+            push: AddPush {
                 output: output.into(),
                 a: a.into(),
                 b: b.into(),

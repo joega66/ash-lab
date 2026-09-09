@@ -183,13 +183,54 @@ pub trait DeviceFunctionMeta: DynDeviceFunctionMeta {
 
 #[macro_export]
 macro_rules! function {
-    ($shader_ty:ident, $params_ty:ty, $push_constant_ty:ty, $spec_constant:ty, $entry_point:expr, $path:expr) => {
+    ($shader_ty:ident, params: $params_ty:ty, push: $push:ty, $entry_point:expr, $path:expr $(,)?) => {
+        $crate::function!(
+            $shader_ty,
+            params: $params_ty,
+            push: $push,
+            spec: (),
+            $entry_point,
+            $path,
+        );
+    };
+    ($shader_ty:ident, params: $params_ty:ty, spec: $spec:ty, $entry_point:expr, $path:expr $(,)?) => {
+        $crate::function!(
+            $shader_ty,
+            params: $params_ty,
+            push: (),
+            spec: $spec,
+            $entry_point,
+            $path,
+        );
+    };
+    ($shader_ty:ident, push: $push:ty, spec: $spec:ty, $entry_point:expr, $path:expr $(,)?) => {
+        $crate::function!(
+            $shader_ty,
+            params: (),
+            push: $push,
+            spec: $spec,
+            $entry_point,
+            $path,
+        );
+    };
+    ($shader_ty:ident, push: $push:ty, $entry_point:expr, $path:expr $(,)?) => {
+        $crate::function!(
+            $shader_ty,
+            params: (),
+            push: $push,
+            spec: (),
+            $entry_point,
+            $path,
+        );
+    };
+
+    ($shader_ty:ident, params: $params_ty:ty, push: $push:ty, spec: $spec:ty, $entry_point:expr, $path:expr $(,)?) => {
         shader!($shader_ty, $path);
         impl $crate::DeviceFunctionMeta for $shader_ty {
             type Shader = $shader_ty;
             type Params = $params_ty;
-            type PushConstant = $push_constant_ty;
-            type SpecConstant = $spec_constant;
+            type PushConstant = $push;
+            type SpecConstant = $spec;
         }
         impl $crate::DynDeviceFunctionMeta for $shader_ty {
             fn new() -> Self {

@@ -1,7 +1,7 @@
 use crate::AddressSlot;
 use crate::TypeLayout;
-use crate::shader_permutation::*;
 use crate::shader_module::*;
+use crate::shader_permutation::*;
 use crate::shader_type::ShaderType;
 use ash::vk::TaggedStructure;
 use ash::{Device, Entry, Instance, khr, vk};
@@ -277,6 +277,7 @@ impl DeviceContext {
             }
             None => Vec::new(),
         };
+        
         let specialization_info = vk::SpecializationInfo::default()
             .map_entries(&map_entries)
             .data(
