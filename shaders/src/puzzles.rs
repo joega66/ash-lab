@@ -36,6 +36,24 @@ function!(
     "add.slang",
 );
 
+#[push]
+pub struct Add10GuardPush {
+    pub output: RWDeviceAddress<f32>,
+    pub a: DeviceAddress<f32>,
+    pub len: u64,
+}
+#[spec]
+pub struct Add10GuardSpec {
+    pub grid_size_x: u32,
+}
+function!(
+    Add10Guard,
+    push: Add10GuardPush,
+    spec: Add10GuardSpec,
+    "main",
+    "add_10_guard.slang",
+);
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -136,6 +154,62 @@ mod test {
                 b: b.into(),
             },
             grid_dim: UInt3::new(a.len() as u32, 1, 1),
+        );
+
+        let output_host = ctx.create_host_buffer(SIZE);
+        {
+            let output_host = ctx.register_buffer("output_host", &output_host);
+            ctx.enqueue_copy(output, output_host);
+        }
+
+        ctx.execute(None).expect("failed to execute");
+
+        ctx.synchronize();
+
+        let output_host = output_host.map_to_host(&ctx);
+
+        for i in 0..SIZE {
+            assert_eq!(expected[i], output_host[i]);
+        }
+
+        println!("output: {:?}", output_host);
+        println!("expected: {:?}", expected);
+    }
+
+    /// https://puzzles.modular.com/puzzle_03/puzzle_03.html
+    #[test]
+    fn add_10_guard() {
+        const SIZE: usize = 4;
+        const BLOCKS_PER_GRID: usize = 1;
+        const THREADS_PER_BLOCK: usize = 8;
+
+        let mut ctx = DeviceContext::new(&DeviceContextCreateInfo::default());
+
+        let a_host: Vec<_> = (0..SIZE).map(|i| i as f32).collect();
+        let expected: Vec<_> = a_host.iter().map(|x| x + 10_f32).collect();
+
+        let output = ctx.enqueue_create_buffer("output", SIZE);
+        ctx.enqueue_fill(output, 0_f32);
+
+        let a = ctx.enqueue_create_buffer("a", SIZE);
+        ctx.enqueue_copy(a_host.as_slice(), a);
+
+        let add_10 = ctx.compile_function::<Add10Guard>(
+            &(),
+            Some(Add10GuardSpec {
+                grid_size_x: THREADS_PER_BLOCK as u32,
+            }),
+        );
+
+        enqueue_function!(
+            ctx,
+            func: &add_10,
+            push: Add10GuardPush {
+                output: output.into(),
+                a: a.into(),
+                len: a.len() as u64,
+            },
+            grid_dim: UInt3::new(BLOCKS_PER_GRID as u32, 1, 1),
         );
 
         let output_host = ctx.create_host_buffer(SIZE);

@@ -1,15 +1,18 @@
 [SpecializationConstant]
 const uint grid_size_x = 1;
 
-struct AddPush {
+struct Add10GuardPush {
     float *output;
     float *a;
-    float *b;
+    uint64_t len;
 };
 [vk::push_constant]
-AddPush pc;
+Add10GuardPush pc;
 
 [numthreads(grid_size_x, 1, 1)]
 void main(uint thread_id: SV_GroupThreadID) {
-    pc.output[thread_id] = pc.a[thread_id] + pc.b[thread_id];
+    if (thread_id >= pc.len) {
+        return;
+    }
+    pc.output[thread_id] = pc.a[thread_id] + 10;
 }

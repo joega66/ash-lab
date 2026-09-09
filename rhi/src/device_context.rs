@@ -277,7 +277,7 @@ impl DeviceContext {
             }
             None => Vec::new(),
         };
-        
+
         let specialization_info = vk::SpecializationInfo::default()
             .map_entries(&map_entries)
             .data(
@@ -597,6 +597,7 @@ impl DeviceContext {
             .push(&mut vulkan_11_features)
             .push(&mut vulkan_12_features)
             .push(&mut vulkan_13_features);
+        features2.features = features2.features.shader_int64(true);
 
         let create_info = unsafe {
             vk::DeviceCreateInfo::default()
