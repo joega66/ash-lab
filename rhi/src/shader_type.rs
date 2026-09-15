@@ -1,5 +1,3 @@
-use bytemuck::Pod;
-
 use crate::{Binding, SpecializationConstant, Type};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -335,7 +333,12 @@ impl TypeLayout {
                 ));
             }
 
-            check_type(&field.ty, &constant.parameter.ty, &field_path, &mut mismatches);
+            check_type(
+                &field.ty,
+                &constant.parameter.ty,
+                &field_path,
+                &mut mismatches,
+            );
         }
 
         finish(mismatches)

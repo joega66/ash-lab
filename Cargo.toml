@@ -1,6 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["compiler", "dataset", "rhi", "rhi-reflect", "shaders", "viewer"]
+members = [
+    "compiler",
+    "dataset",
+    "layout",
+    "rhi",
+    "rhi-reflect",
+    "shaders",
+    "viewer",
+]
 
 [patch.crates-io]
 ash = { git = "https://github.com/ash-rs/ash" }

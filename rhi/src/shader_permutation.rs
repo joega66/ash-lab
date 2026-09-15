@@ -7,6 +7,7 @@ pub trait ShaderDefine {
 /// Give a shader permutation dimension its preprocessor define name.
 /// Example usage:
 /// ```
+/// use rhi::shader_define;
 /// shader_define!(EnableShadows, "ENABLE_SHADOWS");
 /// ```
 #[macro_export]
@@ -51,6 +52,14 @@ impl<D: ShaderDefine> ShaderPermutationBool<D> {
         self
     }
 }
+
+impl<D: ShaderDefine> Clone for ShaderPermutationBool<D> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<D: ShaderDefine> Copy for ShaderPermutationBool<D> {}
 
 impl<D: ShaderDefine> ShaderPermutationDimension for ShaderPermutationBool<D> {
     fn name() -> &'static str {
@@ -109,6 +118,14 @@ impl<D: ShaderDefine, const MIN: i32, const MAX: i32> ShaderPermutationInt<D, MI
     }
 }
 
+impl<D: ShaderDefine, const MIN: i32, const MAX: i32> Clone for ShaderPermutationInt<D, MIN, MAX> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<D: ShaderDefine, const MIN: i32, const MAX: i32> Copy for ShaderPermutationInt<D, MIN, MAX> {}
+
 impl<D: ShaderDefine, const MIN: i32, const MAX: i32> ShaderPermutationDimension
     for ShaderPermutationInt<D, MIN, MAX>
 {
@@ -158,6 +175,14 @@ impl<D: ShaderDefine, E: ShaderPermutationEnum> ShaderPermutationEnumValue<D, E>
         self
     }
 }
+
+impl<D: ShaderDefine, E: ShaderPermutationEnum> Clone for ShaderPermutationEnumValue<D, E> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<D: ShaderDefine, E: ShaderPermutationEnum> Copy for ShaderPermutationEnumValue<D, E> {}
 
 impl<D: ShaderDefine, E: ShaderPermutationEnum> ShaderPermutationDimension
     for ShaderPermutationEnumValue<D, E>
@@ -228,7 +253,7 @@ macro_rules! shader_permutation_enum {
 /// shader_define!(EnableShadows, "ENABLE_SHADOWS");
 /// shader_define!(CascadeCount, "CASCADE_COUNT");
 ///
-/// #[derive(ShaderPermutation)]
+/// #[derive(Clone, Copy, ShaderPermutation)]
 /// struct MyPermutations {
 ///     shadows: ShaderPermutationBool<EnableShadows>,
 ///     cascades: ShaderPermutationInt<CascadeCount, 1, 4>,

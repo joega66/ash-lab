@@ -86,7 +86,7 @@ pub fn derive_shader_parameters(input: TokenStream) -> TokenStream {
             rhi::ShaderParameter {
                 name: #field_name,
                 kind: <#ty as rhi::Descriptor>::kind(),
-                buffer: rhi::Descriptor::handle(&self.#field_ident),
+                handle: rhi::Descriptor::handle(&self.#field_ident),
             }
         }
     });

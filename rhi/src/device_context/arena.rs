@@ -1,37 +1,53 @@
-use std::{hash::Hash, hash::Hasher, marker::PhantomData};
+use std::{
+    hash::{Hash, Hasher},
+    marker::{PhantomData},
+};
 
-pub struct ResourceId<T> {
+pub struct Handle<T> {
     index: u32,
     generation: u32,
     _marker: PhantomData<fn() -> T>,
 }
 
-impl<T> Clone for ResourceId<T> {
+impl<T> Handle<T> {
+    pub fn from_u64(raw: u64) -> Self {
+        Self {
+            index: (raw >> 32) as u32,
+            generation: (raw & 0xFFFFFFFF) as u32,
+            _marker: PhantomData::default(),
+        }
+    }
+    pub fn as_u64(&self) -> u64 {
+        ((self.index as u64) << 32) | (self.generation as u64)
+    }
+}
+
+impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T> Copy for ResourceId<T> {}
+impl<T> Copy for Handle<T> {}
 
-impl<T> PartialEq for ResourceId<T> {
+impl<T> PartialEq for Handle<T> {
     fn eq(&self, o: &Self) -> bool {
         self.index == o.index && self.generation == o.generation
     }
 }
 
-impl<T> Eq for ResourceId<T> {}
+impl<T> Eq for Handle<T> {}
 
-impl<T> Hash for ResourceId<T> {
+impl<T> Hash for Handle<T> {
     fn hash<H: Hasher>(&self, h: &mut H) {
         self.index.hash(h);
         self.generation.hash(h);
     }
 }
 
-impl<T> std::fmt::Debug for ResourceId<T> {
+impl<T> std::fmt::Debug for Handle<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ResourceId(#{}, gen {})", self.index, self.generation)
+        write!(f, "Handle(#{}, gen {})", self.index, self.generation)
     }
 }
 
@@ -53,7 +69,7 @@ impl<T> Arena<T> {
         }
     }
 
-    pub fn insert(&mut self, value: T) -> ResourceId<T> {
+    pub fn insert(&mut self, value: T) -> Handle<T> {
         let index = match self.free.pop() {
             Some(index) => {
                 self.slots[index as usize].value = Some(value);
@@ -67,14 +83,14 @@ impl<T> Arena<T> {
                 (self.slots.len() - 1) as u32
             }
         };
-        ResourceId {
+        Handle {
             index,
             generation: self.slots[index as usize].generation,
             _marker: PhantomData,
         }
     }
 
-    pub fn get(&self, id: ResourceId<T>) -> Option<&T> {
+    pub fn get(&self, id: Handle<T>) -> Option<&T> {
         let slot = self.slots.get(id.index as usize)?;
         if slot.generation != id.generation {
             return None;
@@ -82,7 +98,7 @@ impl<T> Arena<T> {
         slot.value.as_ref()
     }
 
-    pub fn remove(&mut self, id: ResourceId<T>) -> Option<T> {
+    pub fn remove(&mut self, id: Handle<T>) -> Option<T> {
         let slot = self.slots.get_mut(id.index as usize)?;
         if slot.generation != id.generation {
             return None;

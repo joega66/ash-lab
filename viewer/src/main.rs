@@ -159,7 +159,7 @@ impl Renderer {
         let (set_layout, pipeline_layout, graphics_pipeline) =
             Self::create_graphics_pipeline(&ctx, swapchain.format());
 
-        let camera_buffer = ctx.create_constant_buffer();
+        let camera_buffer = ctx.create_constant_buffer("camera");
 
         let (descriptor_pool, descriptor_set) = Self::allocate_descriptor_set(&ctx, set_layout);
 
@@ -330,90 +330,87 @@ impl Renderer {
     }
 
     unsafe fn render(&mut self, backbuffer: &SwapchainImage) {
-        let backbuffer = self
-            .ctx
-            .register_image("backbuffer", self.swapchain.image(backbuffer));
+        let backbuffer = self.swapchain.image(backbuffer);
 
-        let camera_buffer = self
-            .ctx
-            .register_buffer("camera_buffer", &self.camera_buffer);
-        self.ctx.enqueue_copy(&[self.camera_uniform], camera_buffer);
+        self.ctx
+            .enqueue_copy(&[self.camera_uniform], &self.camera_buffer);
 
-        let extent = self.swapchain.extent().clone();
-        let descriptor_set = self.descriptor_set.clone();
-        let pipeline_layout = self.pipeline_layout.clone();
-        let graphics_pipeline = self.graphics_pipeline.clone();
+        {
+            let extent = self.swapchain.extent().clone();
+            let descriptor_set = self.descriptor_set.clone();
+            let pipeline_layout = self.pipeline_layout.clone();
+            let graphics_pipeline = self.graphics_pipeline.clone();
+            let backbuffer = backbuffer.clone();
 
-        self.ctx.enqueue_pass(
-            "TrianglePass",
-            &[constant_buffer_read(
-                camera_buffer,
-                vk::PipelineStageFlags2::VERTEX_SHADER,
-            )],
-            &[color_attachment(backbuffer)],
-            Box::new(move |ctx, command_buffer| {
-                let clear_value = vk::ClearValue {
-                    color: vk::ClearColorValue {
-                        float32: [0.01, 0.01, 0.02, 1.0],
-                    },
-                };
+            self.ctx.enqueue_pass(
+                "TrianglePass",
+                &[constant_buffer_read(
+                    self.camera_buffer.buffer(),
+                    vk::PipelineStageFlags2::VERTEX_SHADER,
+                )],
+                &[color_attachment(&backbuffer)],
+                Box::new(move |ctx, command_buffer| {
+                    let clear_value = vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: [0.01, 0.01, 0.02, 1.0],
+                        },
+                    };
 
-                let render_area = vk::Rect2D {
-                    offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: extent.clone(),
-                };
+                    let render_area = vk::Rect2D {
+                        offset: vk::Offset2D { x: 0, y: 0 },
+                        extent: extent.clone(),
+                    };
 
-                let backbuffer = ctx.image(&backbuffer);
+                    ctx.device.cmd_begin_rendering(
+                        command_buffer,
+                        &vk::RenderingInfo::default()
+                            .render_area(render_area)
+                            .layer_count(1)
+                            .color_attachments(&[vk::RenderingAttachmentInfo::default()
+                                .image_view(backbuffer.image_view())
+                                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                                .load_op(vk::AttachmentLoadOp::CLEAR)
+                                .store_op(vk::AttachmentStoreOp::STORE)
+                                .clear_value(clear_value)]),
+                    );
 
-                ctx.device.cmd_begin_rendering(
-                    command_buffer,
-                    &vk::RenderingInfo::default()
-                        .render_area(render_area)
-                        .layer_count(1)
-                        .color_attachments(&[vk::RenderingAttachmentInfo::default()
-                            .image_view(backbuffer.image_view)
-                            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                            .load_op(vk::AttachmentLoadOp::CLEAR)
-                            .store_op(vk::AttachmentStoreOp::STORE)
-                            .clear_value(clear_value)]),
-                );
+                    let descriptor_sets = [descriptor_set.clone()];
 
-                let descriptor_sets = [descriptor_set.clone()];
+                    ctx.device.cmd_bind_descriptor_sets(
+                        command_buffer,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        pipeline_layout,
+                        0,
+                        &descriptor_sets,
+                        &[],
+                    );
 
-                ctx.device.cmd_bind_descriptor_sets(
-                    command_buffer,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    pipeline_layout,
-                    0,
-                    &descriptor_sets,
-                    &[],
-                );
+                    ctx.device.cmd_bind_pipeline(
+                        command_buffer,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        graphics_pipeline,
+                    );
 
-                ctx.device.cmd_bind_pipeline(
-                    command_buffer,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    graphics_pipeline,
-                );
+                    let viewport = vk::Viewport {
+                        x: 0.0,
+                        y: 0.0,
+                        width: extent.width as f32,
+                        height: extent.height as f32,
+                        min_depth: 0.0,
+                        max_depth: 1.0,
+                    };
+                    ctx.device.cmd_set_viewport(command_buffer, 0, &[viewport]);
+                    ctx.device
+                        .cmd_set_scissor(command_buffer, 0, &[render_area]);
 
-                let viewport = vk::Viewport {
-                    x: 0.0,
-                    y: 0.0,
-                    width: extent.width as f32,
-                    height: extent.height as f32,
-                    min_depth: 0.0,
-                    max_depth: 1.0,
-                };
-                ctx.device.cmd_set_viewport(command_buffer, 0, &[viewport]);
-                ctx.device
-                    .cmd_set_scissor(command_buffer, 0, &[render_area]);
+                    ctx.device.cmd_draw(command_buffer, 3, 1, 0, 0);
 
-                ctx.device.cmd_draw(command_buffer, 3, 1, 0, 0);
+                    ctx.device.cmd_end_rendering(command_buffer);
+                }),
+            );
+        }
 
-                ctx.device.cmd_end_rendering(command_buffer);
-            }),
-        );
-
-        self.ctx.execute(Some(backbuffer)).unwrap();
+        self.ctx.execute(Some(backbuffer.clone())).unwrap();
     }
 
     fn update(&mut self) {

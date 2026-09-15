@@ -1,29 +1,32 @@
-use crate::AddressSlot;
-use crate::TypeLayout;
-use crate::shader_module::*;
-use crate::shader_permutation::*;
-use crate::shader_type::ShaderType;
-use ash::vk::TaggedStructure;
-use ash::{Device, Entry, Instance, khr, vk};
-use bytemuck::AnyBitPattern;
-use bytemuck::Pod;
-use raw_window_handle::RawDisplayHandle;
-use raw_window_handle::RawWindowHandle;
-use std::fmt;
-use std::marker::PhantomData;
-use std::ops::Index;
+use crate::{
+    AddressSlot, TypeLayout, shader_module::*, shader_permutation::*, shader_type::ShaderType,
+};
+use ash::{
+    Device, Entry, Instance, khr,
+    vk::{self, TaggedStructure},
+};
+use bytemuck::{AnyBitPattern, Pod};
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use std::{
     any::TypeId,
     collections::{HashMap, HashSet, VecDeque},
     ffi::CStr,
-    hash::{Hash, Hasher},
+    fmt,
+    hash::Hash,
     io::Cursor,
-    sync::Arc,
-    sync::mpsc::{self, Receiver, Sender},
+    marker::PhantomData,
+    ops::Index,
+    rc::Rc,
+    sync::{
+        Arc,
+        mpsc::{self, Receiver, Sender},
+    },
 };
-use vk_mem::Alloc;
-use vk_mem::{AllocationCreateFlags, MemoryUsage};
+use vk_mem::{Alloc, AllocationCreateFlags, MemoryUsage};
 use winit::window::Window;
+
+mod arena;
+pub use arena::*;
 
 mod render_graph;
 pub use render_graph::*;
@@ -79,6 +82,8 @@ pub struct DeviceContext {
     shaders: HashMap<std::any::TypeId, ShaderModuleArray>,
 
     functions: HashMap<std::any::TypeId, StaticDeviceFunctionArray>,
+
+    buffers: Arena<DeviceBufferInner>,
 
     rg: RgContext,
 
@@ -182,6 +187,7 @@ impl DeviceContext {
             set_allocators,
             shaders,
             functions,
+            buffers: Arena::new(),
             rg: RgContext::new(),
             device: DeviceOwner::new(device),
             instance: InstanceOwner::new(instance),
@@ -190,54 +196,48 @@ impl DeviceContext {
     }
 
     /// Returns a new buffer.
-    pub fn create_buffer<T>(&mut self, len: usize) -> DeviceBuffer<T> {
+    pub fn create_buffer<T>(&mut self, name: &str, len: usize) -> DeviceBuffer<T> {
         let memory_info = vk_mem::AllocationCreateInfo {
             flags: AllocationCreateFlags::empty(),
             usage: MemoryUsage::Auto,
             ..Default::default()
         };
-        DeviceBuffer::<T> {
-            details: self.create_buffer_inner(
-                len * std::mem::size_of::<T>(),
-                default_buffer_usage(),
-                &memory_info,
-            ),
-            _marker: PhantomData,
-        }
+        self.create_buffer_inner(
+            name,
+            len * std::mem::size_of::<T>(),
+            default_buffer_usage(),
+            &memory_info,
+        )
     }
 
     /// Returns a new buffer that can be read by the host.
-    pub fn create_host_buffer<T>(&mut self, len: usize) -> DeviceBuffer<T> {
+    pub fn create_host_buffer<T>(&mut self, name: &str, len: usize) -> DeviceBuffer<T> {
         let memory_info = vk_mem::AllocationCreateInfo {
             flags: AllocationCreateFlags::HOST_ACCESS_RANDOM,
             usage: MemoryUsage::AutoPreferHost,
             ..Default::default()
         };
-        DeviceBuffer::<T> {
-            details: self.create_buffer_inner(
-                len * std::mem::size_of::<T>(),
-                default_buffer_usage(),
-                &memory_info,
-            ),
-            _marker: PhantomData,
-        }
+        self.create_buffer_inner(
+            name,
+            len * std::mem::size_of::<T>(),
+            default_buffer_usage(),
+            &memory_info,
+        )
     }
 
     /// Returns a new buffer suitable for using as a ConstantBuffer descriptor.
-    pub fn create_constant_buffer<T>(&mut self) -> DeviceBuffer<T> {
+    pub fn create_constant_buffer<T>(&mut self, name: &str) -> DeviceBuffer<T> {
         let memory_info = vk_mem::AllocationCreateInfo {
             flags: AllocationCreateFlags::empty(),
             usage: MemoryUsage::Auto,
             ..Default::default()
         };
-        DeviceBuffer::<T> {
-            details: self.create_buffer_inner(
-                std::mem::size_of::<T>(),
-                default_buffer_usage() | vk::BufferUsageFlags::UNIFORM_BUFFER,
-                &memory_info,
-            ),
-            _marker: PhantomData,
-        }
+        self.create_buffer_inner(
+            name,
+            std::mem::size_of::<T>(),
+            default_buffer_usage() | vk::BufferUsageFlags::UNIFORM_BUFFER,
+            &memory_info,
+        )
     }
 
     /// Compiles the provided function for execution on this device.
@@ -257,7 +257,7 @@ impl DeviceContext {
 
         let entry_point_c_str = std::ffi::CString::new(T::new().entry_point()).unwrap();
 
-        let map_entries = match spec_constant {
+        let map_entries: Result<_, _> = match spec_constant {
             Some(_) => {
                 let spec_constant_layout = <T as DeviceFunctionMeta>::SpecConstant::type_layout();
                 if let TypeLayout::Struct { fields, .. } = spec_constant_layout {
@@ -269,13 +269,21 @@ impl DeviceContext {
                             size: field.ty.size() as usize,
                         });
                     }
-                    map_entries
+                    Ok(map_entries)
                 } else {
                     // This situation should be impossible
-                    panic!("expected a Struct, got a {:?}", spec_constant_layout)
+                    Err(format!(
+                        "expected a Struct, got a {:?}",
+                        spec_constant_layout
+                    ))
                 }
             }
-            None => Vec::new(),
+            None => Ok(Vec::new()),
+        };
+
+        let map_entries = match map_entries {
+            Ok(map_entries) => map_entries,
+            Err(e) => panic!("{:?}", e),
         };
 
         let specialization_info = vk::SpecializationInfo::default()
@@ -482,71 +490,82 @@ impl DeviceContext {
                 .enumerate_physical_devices()
                 .expect("failed to enumerate physical devices")
         };
+        let result = (move || {
+            for physical_device in physical_devices {
+                let queue_families = unsafe {
+                    instance.get_physical_device_queue_family_properties(physical_device)
+                };
 
-        for physical_device in physical_devices {
-            let queue_families =
-                unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+                let mut graphics_family = None;
+                let mut present_family = None;
 
-            let mut graphics_family = None;
-            let mut present_family = None;
+                for (index, family) in queue_families.iter().enumerate() {
+                    let index = index as u32;
 
-            for (index, family) in queue_families.iter().enumerate() {
-                let index = index as u32;
+                    if family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
+                        graphics_family = Some(index);
+                    }
 
-                if family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                    graphics_family = Some(index);
-                }
+                    if let (Some(surface_loader), Some(surface)) =
+                        (surface_loader.as_ref(), surface.as_ref())
+                    {
+                        let supports_present = unsafe {
+                            surface_loader
+                                .get_physical_device_surface_support(
+                                    physical_device,
+                                    index,
+                                    *surface,
+                                )
+                                .unwrap_or(false)
+                        };
 
-                if let (Some(surface_loader), Some(surface)) =
-                    (surface_loader.as_ref(), surface.as_ref())
-                {
-                    let supports_present = unsafe {
-                        surface_loader
-                            .get_physical_device_surface_support(physical_device, index, *surface)
-                            .unwrap_or(false)
-                    };
+                        if supports_present {
+                            present_family = Some(index);
+                        }
+                    }
 
-                    if supports_present {
-                        present_family = Some(index);
+                    // With surface: Find graphics + present
+                    // Without surface: Find graphics
+                    if graphics_family.is_some() && (present_family.is_some() || surface.is_none())
+                    {
+                        break;
                     }
                 }
 
-                // With surface: Find graphics + present
-                // Without surface: Find graphics
-                if graphics_family.is_some() && (present_family.is_some() || surface.is_none()) {
-                    break;
+                if graphics_family.is_none() || (present_family.is_none() && surface.is_some()) {
+                    continue;
                 }
+
+                let extension_properties = unsafe {
+                    instance
+                        .enumerate_device_extension_properties(physical_device)
+                        .unwrap_or_default()
+                };
+                let has_extension = |name: &CStr| {
+                    extension_properties
+                        .iter()
+                        .any(|ext| ext.extension_name_as_c_str() == Ok(name))
+                };
+
+                if !has_extension(khr::swapchain::NAME) {
+                    continue;
+                }
+                let portability_subset = has_extension(khr::portability_subset::NAME);
+
+                return Ok((
+                    physical_device,
+                    graphics_family.unwrap(),
+                    present_family,
+                    portability_subset,
+                ));
             }
-
-            if graphics_family.is_none() || (present_family.is_none() && surface.is_some()) {
-                continue;
-            }
-
-            let extension_properties = unsafe {
-                instance
-                    .enumerate_device_extension_properties(physical_device)
-                    .unwrap_or_default()
-            };
-            let has_extension = |name: &CStr| {
-                extension_properties
-                    .iter()
-                    .any(|ext| ext.extension_name_as_c_str() == Ok(name))
-            };
-
-            if !has_extension(khr::swapchain::NAME) {
-                continue;
-            }
-            let portability_subset = has_extension(khr::portability_subset::NAME);
-
-            return (
-                physical_device,
-                graphics_family.unwrap(),
-                present_family,
-                portability_subset,
-            );
-        }
-
-        panic!("no suitable Vulkan physical device found");
+            Err("no suitable Vulkan physical device found")
+        })();
+        let result = match result {
+            Ok(result) => result,
+            Err(e) => panic!("{e}"),
+        };
+        result
     }
 
     unsafe fn create_logical_device(
@@ -861,16 +880,15 @@ impl DeviceContext {
                 .create_descriptor_set_layout(&dslci, None)
                 .expect("failed to create descriptor set layout")
         };
-        let push_constant_ranges = if push_constant_range_size > 0 {
-            vec![
+        let mut push_constant_ranges = Vec::new();
+        if push_constant_range_size > 0 {
+            push_constant_ranges = vec![
                 vk::PushConstantRange::default()
                     .stage_flags(vk::ShaderStageFlags::COMPUTE)
                     .offset(0)
                     .size(push_constant_range_size),
             ]
-        } else {
-            Vec::new()
-        };
+        }
         let set_layouts = [set_layout];
         let pipeline_layout = unsafe {
             device
@@ -980,12 +998,13 @@ impl DeviceContext {
     }
 
     /// Returns a new buffer with low-level vk_mem information.
-    fn create_buffer_inner(
+    fn create_buffer_inner<T>(
         &mut self,
+        name: &str,
         size: usize,
         usage: vk::BufferUsageFlags,
         memory_info: &vk_mem::AllocationCreateInfo,
-    ) -> DeviceBufferDetails {
+    ) -> DeviceBuffer<T> {
         let create_info = vk::BufferCreateInfo::default()
             .size(size as vk::DeviceSize)
             .usage(usage);
@@ -1008,14 +1027,25 @@ impl DeviceContext {
             }
         };
 
-        DeviceBufferDetails {
+        let handle = self.buffers.insert(DeviceBufferInner {
+            label: String::from(name),
             buffer,
-            size: size,
-            usage: usage,
+            size,
+            usage,
             memory_info: memory_info.clone(),
             allocation,
             address,
-            trash_tx: self.trash_tx.clone(),
+        });
+
+        DeviceBuffer::<T> {
+            shared: Rc::new(DeviceBufferShared {
+                label: String::from(name),
+                handle,
+                buffer,
+                size,
+                trash_tx: self.trash_tx.clone(),
+            }),
+            _marker: PhantomData::default(),
         }
     }
 
@@ -1028,12 +1058,14 @@ impl DeviceContext {
         subresource_range: &vk::ImageSubresourceRange,
     ) -> DeviceImage {
         DeviceImage {
-            image,
-            image_view,
-            create_info: create_info.clone(),
-            subresource_range: subresource_range.clone(),
-            allocation: None,
-            trash_tx: self.trash_tx.clone(),
+            shared: Rc::new(DeviceImageShared {
+                image,
+                image_view,
+                create_info: create_info.clone(),
+                subresource_range: subresource_range.clone(),
+                allocation: None,
+                trash_tx: self.trash_tx.clone(),
+            }),
         }
     }
 
@@ -1075,7 +1107,12 @@ impl DeviceContext {
             .is_some_and(|(v, _)| *v <= graphics_queue_time)
         {
             let trash = self.trash.pop_front().unwrap();
-            Self::destroy(trash.1, &self.device, &mut self.mem_allocator);
+            Self::destroy(
+                trash.1,
+                &self.device,
+                &mut self.buffers,
+                &mut self.mem_allocator,
+            );
         }
 
         let mut set_allocators = std::mem::take(&mut self.set_allocators);
@@ -1086,10 +1123,16 @@ impl DeviceContext {
     }
 
     /// Destroys a piece of Trash.
-    fn destroy(trash: Trash, device: &Device, mem_allocator: &mut vk_mem::Allocator) {
+    fn destroy(
+        trash: Trash,
+        device: &Device,
+        buffers: &mut Arena<DeviceBufferInner>,
+        mem_allocator: &mut vk_mem::Allocator,
+    ) {
         match trash {
-            Trash::Buffer((buffer, mut allocation)) => unsafe {
-                mem_allocator.destroy_buffer(buffer, &mut allocation);
+            Trash::Buffer(id) => unsafe {
+                let mut buffer = buffers.remove(id).unwrap();
+                mem_allocator.destroy_buffer(buffer.buffer, &mut buffer.allocation);
             },
             Trash::Image((image, image_view, allocation)) => unsafe {
                 device.destroy_image_view(image_view, None);
@@ -1149,7 +1192,12 @@ impl Drop for DeviceContext {
             .drain(..)
             .chain(self.trash_rx.try_iter().map(|t| (0, t)))
         {
-            Self::destroy(trash, &self.device, &mut self.mem_allocator);
+            Self::destroy(
+                trash,
+                &self.device,
+                &mut self.buffers,
+                &mut self.mem_allocator,
+            );
         }
         self.trash = trash;
 
@@ -1237,25 +1285,9 @@ pub enum QueueType {
 }
 
 enum Trash {
-    Buffer((vk::Buffer, vk_mem::Allocation)),
+    Buffer(Handle<DeviceBufferInner>),
     Image((vk::Image, vk::ImageView, Option<vk_mem::Allocation>)),
     Generic(Box<dyn Fn(&Device)>),
-}
-
-impl Drop for DeviceBufferDetails {
-    fn drop(&mut self) {
-        let _ = self
-            .trash_tx
-            .send(Trash::Buffer((self.buffer, self.allocation)));
-    }
-}
-
-impl Drop for DeviceImage {
-    fn drop(&mut self) {
-        let _ = self
-            .trash_tx
-            .send(Trash::Image((self.image, self.image_view, self.allocation)));
-    }
 }
 
 fn default_buffer_usage() -> vk::BufferUsageFlags {
@@ -1265,62 +1297,96 @@ fn default_buffer_usage() -> vk::BufferUsageFlags {
         | vk::BufferUsageFlags::TRANSFER_DST
 }
 
-struct DeviceBufferDetails {
-    /// Vulkan buffer handle.
+pub struct DeviceBufferInner {
+    #[allow(dead_code)]
+    label: String,
     buffer: vk::Buffer,
-
-    /// Buffer length in elements.
     size: usize,
-
-    /// Buffer usage
+    #[allow(dead_code)]
     usage: vk::BufferUsageFlags,
-
-    /// Memory create info.
+    #[allow(dead_code)]
     memory_info: vk_mem::AllocationCreateInfo,
-
-    /// VMA handle.
     allocation: vk_mem::Allocation,
-
-    /// GPU address.
     address: vk::DeviceAddress,
+}
 
-    /// Trash sender.
+impl DeviceBufferInner {
+    fn buffer(&self) -> vk::Buffer {
+        self.buffer
+    }
+
+    fn size(&self) -> usize {
+        self.size
+    }
+
+    fn allocation(&self) -> vk_mem::Allocation {
+        self.allocation
+    }
+
+    fn address(&self) -> vk::DeviceAddress {
+        self.address
+    }
+}
+
+struct DeviceBufferShared {
+    label: String,
+    handle: Handle<DeviceBufferInner>,
+    buffer: vk::Buffer,
+    size: usize,
     trash_tx: Sender<Trash>,
 }
 
-pub struct DeviceBuffer<T> {
-    /// Details.
-    details: DeviceBufferDetails,
+impl Drop for DeviceBufferShared {
+    fn drop(&mut self) {
+        let _ = self.trash_tx.send(Trash::Buffer(self.handle));
+    }
+}
 
-    /// Marker.
+pub struct DeviceBuffer<T> {
+    shared: Rc<DeviceBufferShared>,
     _marker: PhantomData<T>,
 }
 
 impl<T> DeviceBuffer<T> {
+    pub fn name(&self) -> &str {
+        &self.shared.label
+    }
+
+    pub fn handle(&self) -> Handle<DeviceBufferInner> {
+        self.shared.handle
+    }
+
     pub fn buffer(&self) -> vk::Buffer {
-        self.details.buffer
+        self.shared.buffer
     }
 
     pub fn size(&self) -> usize {
-        self.details.size
+        self.shared.size
     }
 
     pub fn len(&self) -> usize {
         self.size() / std::mem::size_of::<T>()
     }
+}
 
-    pub fn address(&self) -> vk::DeviceAddress {
-        self.details.address
+impl<T> Clone for DeviceBuffer<T> {
+    fn clone(&self) -> Self {
+        Self {
+            shared: self.shared.clone(),
+            _marker: self._marker.clone(),
+        }
     }
 }
 
 impl<T: AnyBitPattern> DeviceBuffer<T> {
     pub fn map_to_host<'a>(&self, ctx: &'a DeviceContext) -> HostMappedMemory<'a, T> {
-        let raw = ctx.map_memory(self.details.allocation, self.size());
+        let allocation = ctx.buffers.get(self.shared.handle).unwrap().allocation;
+        let raw = ctx.map_memory(allocation, self.size());
+        let raw = bytemuck::cast_slice(raw);
         HostMappedMemory::<'a, T> {
-            allocation: self.details.allocation,
-            raw: bytemuck::cast_slice(raw),
-            ctx: ctx,
+            allocation,
+            raw,
+            ctx,
         }
     }
 }
@@ -1351,24 +1417,26 @@ impl<T: fmt::Debug> fmt::Debug for HostMappedMemory<'_, T> {
     }
 }
 
-pub struct DeviceImage {
-    /// Vulkan image handle
+struct DeviceImageShared {
     image: vk::Image,
-
-    /// Vulkan image view handle created by default
     image_view: vk::ImageView,
-
-    /// Create info
     create_info: DeviceImageCreateInfo,
-
-    /// Image view info
     subresource_range: vk::ImageSubresourceRange,
-
-    /// VMA handle
     allocation: Option<vk_mem::Allocation>,
-
-    /// Trash sender.
     trash_tx: Sender<Trash>,
+}
+
+impl Drop for DeviceImageShared {
+    fn drop(&mut self) {
+        let _ = self
+            .trash_tx
+            .send(Trash::Image((self.image, self.image_view, self.allocation)));
+    }
+}
+
+#[derive(Clone)]
+pub struct DeviceImage {
+    shared: Rc<DeviceImageShared>,
 }
 
 #[derive(Clone)]
@@ -1376,16 +1444,19 @@ pub struct DeviceImageCreateInfo {}
 
 impl DeviceImage {
     pub fn image(&self) -> vk::Image {
-        self.image
+        self.shared.image
     }
+
     pub fn image_view(&self) -> vk::ImageView {
-        self.image_view
+        self.shared.image_view
     }
+
     pub fn create_info(&self) -> &DeviceImageCreateInfo {
-        &self.create_info
+        &self.shared.create_info
     }
+
     pub fn subresource_range(&self) -> &vk::ImageSubresourceRange {
-        &self.subresource_range
+        &self.shared.subresource_range
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::{AnyRgBuffer, RgBuffer, ShaderType, TypeLayout, describe_tagged, tag_buffer_ref};
+use crate::{DeviceBuffer, DeviceBufferInner, Handle, ShaderType, TypeLayout};
 use ash::vk;
 use std::marker::PhantomData;
 
@@ -37,11 +37,11 @@ pub trait Descriptor {
         None
     }
 
-    fn handle(&self) -> AnyRgBuffer;
+    fn handle(&self) -> Handle<DeviceBufferInner>;
 }
 
 pub struct ConstantBuffer<T: ShaderType> {
-    handle: RgBuffer<T>,
+    buffer: DeviceBuffer<T>,
     _marker: PhantomData<fn() -> T>,
 }
 
@@ -52,13 +52,13 @@ impl<T: ShaderType> Descriptor for ConstantBuffer<T> {
     fn layout() -> Option<fn() -> TypeLayout> {
         Some(<T as ShaderType>::type_layout)
     }
-    fn handle(&self) -> AnyRgBuffer {
-        self.handle.into()
+    fn handle(&self) -> Handle<DeviceBufferInner> {
+        self.buffer.handle()
     }
 }
 
 pub struct StructuredBuffer<T: ShaderType> {
-    handle: RgBuffer<T>,
+    buffer: DeviceBuffer<T>,
     _marker: PhantomData<fn() -> T>,
 }
 
@@ -69,13 +69,13 @@ impl<T: ShaderType> Descriptor for StructuredBuffer<T> {
     fn layout() -> Option<fn() -> TypeLayout> {
         Some(<T as ShaderType>::type_layout)
     }
-    fn handle(&self) -> AnyRgBuffer {
-        self.handle.into()
+    fn handle(&self) -> Handle<DeviceBufferInner> {
+        self.buffer.handle()
     }
 }
 
 pub struct RWStructuredBuffer<T: ShaderType> {
-    handle: RgBuffer<T>,
+    buffer: DeviceBuffer<T>,
     _marker: PhantomData<fn() -> T>,
 }
 
@@ -86,33 +86,33 @@ impl<T: ShaderType> Descriptor for RWStructuredBuffer<T> {
     fn layout() -> Option<fn() -> TypeLayout> {
         Some(<T as ShaderType>::type_layout)
     }
-    fn handle(&self) -> AnyRgBuffer {
-        self.handle.into()
+    fn handle(&self) -> Handle<DeviceBufferInner> {
+        self.buffer.handle()
     }
 }
 
-impl<T: ShaderType> From<RgBuffer<T>> for ConstantBuffer<T> {
-    fn from(value: RgBuffer<T>) -> Self {
+impl<T: ShaderType> From<DeviceBuffer<T>> for ConstantBuffer<T> {
+    fn from(buffer: DeviceBuffer<T>) -> Self {
         Self {
-            handle: value,
+            buffer,
             _marker: PhantomData,
         }
     }
 }
 
-impl<T: ShaderType> From<RgBuffer<T>> for StructuredBuffer<T> {
-    fn from(value: RgBuffer<T>) -> Self {
+impl<T: ShaderType> From<DeviceBuffer<T>> for StructuredBuffer<T> {
+    fn from(buffer: DeviceBuffer<T>) -> Self {
         Self {
-            handle: value,
+            buffer,
             _marker: PhantomData,
         }
     }
 }
 
-impl<T: ShaderType> From<RgBuffer<T>> for RWStructuredBuffer<T> {
-    fn from(value: RgBuffer<T>) -> Self {
+impl<T: ShaderType> From<DeviceBuffer<T>> for RWStructuredBuffer<T> {
+    fn from(buffer: DeviceBuffer<T>) -> Self {
         Self {
-            handle: value,
+            buffer,
             _marker: PhantomData,
         }
     }
@@ -130,7 +130,7 @@ pub struct RWDeviceAddress<T: ShaderType> {
     _marker: PhantomData<fn() -> T>,
 }
 
-macro_rules! address_copy {
+macro_rules! impl_address_copy {
     ($ty:ident) => {
         impl<T: ShaderType> Clone for $ty<T> {
             fn clone(&self) -> Self {
@@ -140,46 +140,38 @@ macro_rules! address_copy {
         impl<T: ShaderType> Copy for $ty<T> {}
     };
 }
-address_copy!(DeviceAddress);
-address_copy!(RWDeviceAddress);
-
-macro_rules! address_debug {
-    ($ty:ident) => {
-        impl<T: ShaderType> std::fmt::Debug for $ty<T> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(
-                    f,
-                    concat!(stringify!($ty), "({})"),
-                    describe_tagged(self.tagged)
-                )
-            }
-        }
-    };
-}
-address_debug!(DeviceAddress);
-address_debug!(RWDeviceAddress);
+impl_address_copy!(DeviceAddress);
+impl_address_copy!(RWDeviceAddress);
 
 unsafe impl<T: ShaderType + 'static> bytemuck::Zeroable for DeviceAddress<T> {}
 unsafe impl<T: ShaderType + 'static> bytemuck::Pod for DeviceAddress<T> {}
 unsafe impl<T: ShaderType + 'static> bytemuck::Zeroable for RWDeviceAddress<T> {}
 unsafe impl<T: ShaderType + 'static> bytemuck::Pod for RWDeviceAddress<T> {}
 
-impl<T: ShaderType> From<RgBuffer<T>> for DeviceAddress<T> {
-    fn from(value: RgBuffer<T>) -> Self {
+impl<T: ShaderType> From<&DeviceBuffer<T>> for DeviceAddress<T> {
+    fn from(value: &DeviceBuffer<T>) -> Self {
         Self {
-            tagged: tag_buffer_ref(value),
+            tagged: value.handle().as_u64(),
             _marker: PhantomData,
         }
     }
 }
 
-impl<T: ShaderType> From<RgBuffer<T>> for RWDeviceAddress<T> {
-    fn from(value: RgBuffer<T>) -> Self {
+impl<T: ShaderType> From<&DeviceBuffer<T>> for RWDeviceAddress<T> {
+    fn from(value: &DeviceBuffer<T>) -> Self {
         Self {
-            tagged: tag_buffer_ref(value),
+            tagged: value.handle().as_u64(),
             _marker: PhantomData,
         }
     }
+}
+
+/// Cast a DeviceBuffer to DeviceAddress/RWDeviceAddress
+#[macro_export]
+macro_rules! address {
+    ($buffer:expr) => {
+        (&$buffer).into()
+    };
 }
 
 impl<T: ShaderType> ShaderType for DeviceAddress<T> {
@@ -211,7 +203,7 @@ pub struct ShaderParameterType {
 pub struct ShaderParameter {
     pub name: &'static str,
     pub kind: DescriptorKind,
-    pub buffer: AnyRgBuffer,
+    pub handle: Handle<DeviceBufferInner>,
 }
 
 pub trait DynShaderParameters: Sized {

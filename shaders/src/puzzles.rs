@@ -54,6 +54,23 @@ function!(
     "add_10_guard.slang",
 );
 
+// #[push]
+// pub struct Add102dPush {
+//     pub output: RWDeviceAddress<f32>,
+//     pub a: DeviceAddress<f32>,
+// }
+// #[spec]
+// pub struct Add102dSpec {
+//     pub grid_size_x: u32,
+// }
+// function!(
+//     Add102d,
+//     push: Add102dPush,
+//     spec: Add102dSpec,
+//     "main",
+//     "add_10_2d.slang",
+// );
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -70,10 +87,10 @@ mod test {
         let expected: Vec<_> = a_host.iter().map(|x| x + 10_f32).collect();
 
         let output = ctx.enqueue_create_buffer("output", SIZE);
-        ctx.enqueue_fill(output, 0_f32);
+        ctx.enqueue_fill(&output, 0_f32);
 
         let a = ctx.enqueue_create_buffer("a", SIZE);
-        ctx.enqueue_copy(a_host.as_slice(), a);
+        ctx.enqueue_copy(a_host.as_slice(), &a);
 
         let add_10 = ctx.compile_function::<Add10>(
             &(),
@@ -86,17 +103,14 @@ mod test {
             ctx,
             func: &add_10,
             push: Add10Push {
-                output: output.into(),
-                a: a.into(),
+                output: address!(output),
+                a: address!(a),
             },
             grid_dim: UInt3::new(a.len() as u32, 1, 1),
         );
 
-        let output_host = ctx.create_host_buffer(SIZE);
-        {
-            let output_host = ctx.register_buffer("output_host", &output_host);
-            ctx.enqueue_copy(output, output_host);
-        }
+        let output_host = ctx.create_host_buffer("output_host", SIZE);
+        ctx.enqueue_copy(&output, &output_host);
 
         ctx.execute(None).expect("failed to execute");
 
@@ -130,13 +144,13 @@ mod test {
         }
 
         let output = ctx.enqueue_create_buffer("output", SIZE);
-        ctx.enqueue_fill(output, 0_f32);
+        ctx.enqueue_fill(&output, 0_f32);
 
         let a = ctx.enqueue_create_buffer("a", SIZE);
-        ctx.enqueue_copy(a_host.as_slice(), a);
+        ctx.enqueue_copy(a_host.as_slice(), &a);
 
         let b = ctx.enqueue_create_buffer("b", SIZE);
-        ctx.enqueue_copy(b_host.as_slice(), b);
+        ctx.enqueue_copy(b_host.as_slice(), &b);
 
         let add = ctx.compile_function::<Add>(
             &(),
@@ -149,18 +163,15 @@ mod test {
             ctx,
             func: &add,
             push: AddPush {
-                output: output.into(),
-                a: a.into(),
-                b: b.into(),
+                output: address!(output),
+                a: address!(a),
+                b: address!(b)
             },
             grid_dim: UInt3::new(a.len() as u32, 1, 1),
         );
 
-        let output_host = ctx.create_host_buffer(SIZE);
-        {
-            let output_host = ctx.register_buffer("output_host", &output_host);
-            ctx.enqueue_copy(output, output_host);
-        }
+        let output_host = ctx.create_host_buffer("output_host", SIZE);
+        ctx.enqueue_copy(&output, &output_host);
 
         ctx.execute(None).expect("failed to execute");
 
@@ -189,10 +200,10 @@ mod test {
         let expected: Vec<_> = a_host.iter().map(|x| x + 10_f32).collect();
 
         let output = ctx.enqueue_create_buffer("output", SIZE);
-        ctx.enqueue_fill(output, 0_f32);
+        ctx.enqueue_fill(&output, 0_f32);
 
         let a = ctx.enqueue_create_buffer("a", SIZE);
-        ctx.enqueue_copy(a_host.as_slice(), a);
+        ctx.enqueue_copy(a_host.as_slice(), &a);
 
         let add_10 = ctx.compile_function::<Add10Guard>(
             &(),
@@ -205,18 +216,15 @@ mod test {
             ctx,
             func: &add_10,
             push: Add10GuardPush {
-                output: output.into(),
-                a: a.into(),
+                output: address!(output),
+                a: address!(a),
                 len: a.len() as u64,
             },
             grid_dim: UInt3::new(BLOCKS_PER_GRID as u32, 1, 1),
         );
 
-        let output_host = ctx.create_host_buffer(SIZE);
-        {
-            let output_host = ctx.register_buffer("output_host", &output_host);
-            ctx.enqueue_copy(output, output_host);
-        }
+        let output_host = ctx.create_host_buffer("output_host", SIZE);
+        ctx.enqueue_copy(&output, &output_host);
 
         ctx.execute(None).expect("failed to execute");
 
@@ -231,4 +239,14 @@ mod test {
         println!("output: {:?}", output_host);
         println!("expected: {:?}", expected);
     }
+
+    // #[test]
+    // fn add_10_2d() {
+    //     const SIZE: usize = 2;
+    //     const BLOCKS_PER_GRID: usize = 1;
+    //     const THREADS_PER_BLOCK: (usize, usize) = (3, 3);
+    //     type DType = f32;
+
+    //     let mut ctx = DeviceContext::new(&DeviceContextCreateInfo::default());
+    // }
 }
