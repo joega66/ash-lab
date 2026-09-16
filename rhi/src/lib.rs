@@ -10,6 +10,8 @@ pub use bytemuck;
 mod device_context;
 pub use device_context::*;
 
+mod descriptor_pool;
+
 mod shader_permutation;
 pub use shader_permutation::*;
 
@@ -24,6 +26,8 @@ pub use shader_reflection::*;
 
 mod shader_type;
 pub use shader_type::*;
+
+mod utils;
 
 mod vector;
 pub use vector::*;

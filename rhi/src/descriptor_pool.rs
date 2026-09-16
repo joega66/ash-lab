@@ -54,7 +54,7 @@ impl DescriptorSetAllocator {
         }
     }
 
-    pub fn destroy(&self, device: &Device) {
+    pub fn destroy(&self, device: &ash::Device) {
         for pool in self.pools.keys() {
             unsafe {
                 device.destroy_descriptor_pool(*pool, None);

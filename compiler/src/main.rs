@@ -36,7 +36,7 @@ fn check_element_layout(parameter: &ShaderParameterType, reflected: &Type, shade
 /// Checks a device function's `PushConstant` type against the `[vk::push_constant]`
 /// block the shader declared, or `None` when the shader declared none.
 fn check_push_constant_layout(
-    function: &dyn DynDeviceFunctionMeta,
+    function: &dyn DynDeviceFunctionLike,
     expected: Option<&Parameter>,
     shader: &Path,
 ) {
@@ -56,7 +56,7 @@ fn check_push_constant_layout(
 /// Check's a device function's `SpecConstant` type against the `[SpecializationConstant]` block
 /// the shader declared.
 fn check_spec_constant_layout(
-    function: &dyn DynDeviceFunctionMeta,
+    function: &dyn DynDeviceFunctionLike,
     reflection: &ShaderReflection,
     shader: &Path,
 ) {

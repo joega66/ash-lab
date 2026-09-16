@@ -1,4 +1,4 @@
-use crate::{DeviceBuffer, DeviceBufferInner, Handle, ShaderType, TypeLayout};
+use crate::{DeviceBuffer, DeviceBufferInner, ShaderType, TypeLayout, utils::Handle};
 use ash::vk;
 use std::marker::PhantomData;
 

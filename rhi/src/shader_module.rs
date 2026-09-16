@@ -27,7 +27,7 @@ fn workspace_target_dir(start: &Path) -> PathBuf {
 /// Example usage:
 /// shader!(MyShader, "MyShader.slang")
 /// shader!(MyShader, "MyShader.slang", MyShaderPermutations)
-pub trait DynShaderModule {
+pub trait DynShaderModuleLike {
     fn manifest_dir(&self) -> &'static str;
 
     fn relative_path(&self) -> &'static str;
@@ -78,7 +78,7 @@ pub trait DynShaderModule {
     }
 }
 
-pub trait ShaderModule: DynShaderModule {
+pub trait ShaderModuleLike: DynShaderModuleLike {
     type Permutations: ShaderPermutationMatrix;
 
     fn total_permutations(&self) -> usize {
@@ -99,11 +99,11 @@ macro_rules! shader {
     ($ty:ident, $path:expr, $permutations:ty) => {
         pub struct $ty {}
 
-        impl $crate::ShaderModule for $ty {
+        impl $crate::ShaderModuleLike for $ty {
             type Permutations = $permutations;
         }
 
-        impl $crate::DynShaderModule for $ty {
+        impl $crate::DynShaderModuleLike for $ty {
             fn manifest_dir(&self) -> &'static str {
                 env!("CARGO_MANIFEST_DIR")
             }
@@ -111,17 +111,17 @@ macro_rules! shader {
                 $path
             }
             fn total_permutations(&self) -> usize {
-                $crate::ShaderModule::total_permutations(self)
+                $crate::ShaderModuleLike::total_permutations(self)
             }
             fn defines(&self, index: usize) -> Vec<(&'static str, String)> {
-                $crate::ShaderModule::defines(self, index)
+                $crate::ShaderModuleLike::defines(self, index)
             }
         }
 
         $crate::inventory::submit! {
             $crate::ShaderModuleRegistry {
                 type_id: std::any::TypeId::of::<$ty>(),
-                instantiate: || -> Box<dyn $crate::DynShaderModule> { Box::new($ty {}) },
+                instantiate: || -> Box<dyn $crate::DynShaderModuleLike> { Box::new($ty {}) },
             }
         }
     };
@@ -129,13 +129,13 @@ macro_rules! shader {
 
 pub struct ShaderModuleRegistry {
     pub type_id: TypeId,
-    pub instantiate: fn() -> Box<dyn DynShaderModule>,
+    pub instantiate: fn() -> Box<dyn DynShaderModuleLike>,
 }
 
 inventory::collect!(ShaderModuleRegistry);
 
 impl ShaderModuleRegistry {
-    pub fn collect() -> HashMap<TypeId, Box<dyn DynShaderModule>> {
+    pub fn collect() -> HashMap<TypeId, Box<dyn DynShaderModuleLike>> {
         let map = inventory::iter::<ShaderModuleRegistry>()
             .map(|registration| (registration.type_id, (registration.instantiate)()))
             .collect();
@@ -143,7 +143,7 @@ impl ShaderModuleRegistry {
     }
 }
 
-pub trait DynDeviceFunctionMeta {
+pub trait DynDeviceFunctionLike {
     /// `new` is used for accessing the vtable.
     fn new() -> Self
     where
@@ -158,8 +158,8 @@ pub trait DynDeviceFunctionMeta {
     fn entry_point(&self) -> &'static str;
 }
 
-pub trait DeviceFunctionMeta: DynDeviceFunctionMeta {
-    type Shader: DynShaderModule + 'static;
+pub trait DeviceFunctionLike: DynDeviceFunctionLike {
+    type Shader: DynShaderModuleLike + 'static;
     type Params: DynShaderParameters;
     type PushConstant: ShaderType;
     type SpecConstant: ShaderType;
@@ -226,31 +226,31 @@ macro_rules! function {
 
     ($shader_ty:ident, params: $params_ty:ty, push: $push:ty, spec: $spec:ty, $entry_point:expr, $path:expr $(,)?) => {
         shader!($shader_ty, $path);
-        impl $crate::DeviceFunctionMeta for $shader_ty {
+        impl $crate::DeviceFunctionLike for $shader_ty {
             type Shader = $shader_ty;
             type Params = $params_ty;
             type PushConstant = $push;
             type SpecConstant = $spec;
         }
-        impl $crate::DynDeviceFunctionMeta for $shader_ty {
+        impl $crate::DynDeviceFunctionLike for $shader_ty {
             fn new() -> Self {
                 Self {}
             }
 
             fn shader_type(&self) -> std::any::TypeId {
-                $crate::DeviceFunctionMeta::shader_type(self)
+                $crate::DeviceFunctionLike::shader_type(self)
             }
 
             fn parameter_types(&self) -> Vec<$crate::ShaderParameterType> {
-                $crate::DeviceFunctionMeta::parameter_types(self)
+                $crate::DeviceFunctionLike::parameter_types(self)
             }
 
             fn push_constant_layout(&self) -> $crate::TypeLayout {
-                $crate::DeviceFunctionMeta::push_constant_layout(self)
+                $crate::DeviceFunctionLike::push_constant_layout(self)
             }
 
             fn spec_constant_layout(&self) -> $crate::TypeLayout {
-                $crate::DeviceFunctionMeta::spec_constant_layout(self)
+                $crate::DeviceFunctionLike::spec_constant_layout(self)
             }
 
             fn entry_point(&self) -> &'static str {
@@ -261,7 +261,7 @@ macro_rules! function {
             {
                 $crate::DeviceFunctionRegistry {
                     function_type: std::any::TypeId::of::<$shader_ty>(),
-                    instantiate: || -> Box<dyn $crate::DynDeviceFunctionMeta> { Box::new($shader_ty {}) },
+                    instantiate: || -> Box<dyn $crate::DynDeviceFunctionLike> { Box::new($shader_ty {}) },
                 }
             }
         }
@@ -271,13 +271,13 @@ macro_rules! function {
 #[derive(Clone)]
 pub struct DeviceFunctionRegistry {
     pub function_type: TypeId,
-    pub instantiate: fn() -> Box<dyn DynDeviceFunctionMeta>,
+    pub instantiate: fn() -> Box<dyn DynDeviceFunctionLike>,
 }
 
 inventory::collect!(DeviceFunctionRegistry);
 
 impl DeviceFunctionRegistry {
-    pub fn collect() -> HashMap<TypeId, Box<dyn DynDeviceFunctionMeta>> {
+    pub fn collect() -> HashMap<TypeId, Box<dyn DynDeviceFunctionLike>> {
         let map = inventory::iter::<DeviceFunctionRegistry>()
             .map(|registration| (registration.function_type, (registration.instantiate)()))
             .collect();
