@@ -27,11 +27,11 @@ fn shader_type(args: TokenStream, input: TokenStream) -> TokenStream {
         #[derive(
             Clone,
             Copy,
-            ::rhi::bytemuck::Zeroable,
-            ::rhi::bytemuck::Pod,
-            ::rhi_reflect::ShaderType,
+            ::gpu::bytemuck::Zeroable,
+            ::gpu::bytemuck::Pod,
+            ::gpu_reflect::ShaderType,
         )]
-        #[bytemuck(crate = "::rhi::bytemuck")]
+        #[bytemuck(crate = "::gpu::bytemuck")]
         #input
     };
 
@@ -70,10 +70,10 @@ pub fn derive_shader_parameters(input: TokenStream) -> TokenStream {
         let field_name = f.ident.as_ref().unwrap().to_string();
         let ty = &f.ty;
         quote! {
-            rhi::ShaderParameterType {
+            gpu::ShaderParameterType {
                 name: #field_name,
-                kind: <#ty as rhi::Descriptor>::kind(),
-                layout: <#ty as rhi::Descriptor>::layout(),
+                kind: <#ty as gpu::Descriptor>::kind(),
+                layout: <#ty as gpu::Descriptor>::layout(),
             }
         }
     });
@@ -83,21 +83,21 @@ pub fn derive_shader_parameters(input: TokenStream) -> TokenStream {
         let field_name = field_ident.to_string();
         let ty = &f.ty;
         quote! {
-            rhi::ShaderParameter {
+            gpu::ShaderParameter {
                 name: #field_name,
-                kind: <#ty as rhi::Descriptor>::kind(),
-                handle: rhi::Descriptor::handle(&self.#field_ident),
+                kind: <#ty as gpu::Descriptor>::kind(),
+                handle: gpu::Descriptor::handle(&self.#field_ident),
             }
         }
     });
 
     let expanded = quote! {
-        impl #impl_generics rhi::DynShaderParameters for #name #ty_generics #where_clause {
-            fn parameter_types() -> Vec<rhi::ShaderParameterType> {
+        impl #impl_generics gpu::DynShaderParameters for #name #ty_generics #where_clause {
+            fn parameter_types() -> Vec<gpu::ShaderParameterType> {
                 vec![ #( #member_items ),* ]
             }
 
-            fn parameters(&self) -> Vec<rhi::ShaderParameter> {
+            fn parameters(&self) -> Vec<gpu::ShaderParameter> {
                 vec![ #( #value_items ),* ]
             }
         }
@@ -161,18 +161,18 @@ pub fn derive_shader_type(input: TokenStream) -> TokenStream {
         let field_name = field_ident.to_string();
         let ty = &f.ty;
         quote! {
-            rhi::FieldLayout {
+            gpu::FieldLayout {
                 name: #field_name,
                 offset: ::std::mem::offset_of!(Self, #field_ident) as u32,
-                ty: <#ty as rhi::ShaderType>::type_layout(),
+                ty: <#ty as gpu::ShaderType>::type_layout(),
             }
         }
     });
 
     let expanded = quote! {
-        impl #impl_generics rhi::ShaderType for #name #ty_generics #where_clause {
-            fn type_layout() -> rhi::TypeLayout {
-                rhi::TypeLayout::Struct {
+        impl #impl_generics gpu::ShaderType for #name #ty_generics #where_clause {
+            fn type_layout() -> gpu::TypeLayout {
+                gpu::TypeLayout::Struct {
                     name: #name_string,
                     size: ::std::mem::size_of::<Self>() as u32,
                     fields: vec![ #( #field_items ),* ],
@@ -217,22 +217,22 @@ pub fn derive_shader_permutation(input: TokenStream) -> TokenStream {
 
     let flatten_stmts = field_names.iter().zip(&field_types).map(|(f, ty)| {
         quote! {
-            index += rhi::ShaderPermutationDimension::value(&self.#f) * stride;
-            stride *= <#ty as rhi::ShaderPermutationDimension>::len();
+            index += gpu::ShaderPermutationDimension::value(&self.#f) * stride;
+            stride *= <#ty as gpu::ShaderPermutationDimension>::len();
         }
     });
 
     let total_stmts = field_types.iter().map(|ty| {
         quote! {
-            total *= <#ty as rhi::ShaderPermutationDimension>::len();
+            total *= <#ty as gpu::ShaderPermutationDimension>::len();
         }
     });
 
     let define_items = field_names.iter().zip(&field_types).map(|(f, ty)| {
         quote! {
             (
-                <#ty as rhi::ShaderPermutationDimension>::name(),
-                rhi::ShaderPermutationDimension::define_value(&self.#f),
+                <#ty as gpu::ShaderPermutationDimension>::name(),
+                gpu::ShaderPermutationDimension::define_value(&self.#f),
             )
         }
     });
@@ -240,16 +240,16 @@ pub fn derive_shader_permutation(input: TokenStream) -> TokenStream {
     let from_flat_index_stmts = field_names.iter().zip(&field_types).map(|(f, ty)| {
         quote! {
             let #f = {
-                let len = <#ty as rhi::ShaderPermutationDimension>::len();
+                let len = <#ty as gpu::ShaderPermutationDimension>::len();
                 let digit = index % len;
                 index /= len;
-                <#ty as rhi::ShaderPermutationDimension>::from_index(digit)
+                <#ty as gpu::ShaderPermutationDimension>::from_index(digit)
             };
         }
     });
 
     let expanded = quote! {
-        impl #impl_generics rhi::ShaderPermutationMatrix for #name #ty_generics #where_clause {
+        impl #impl_generics gpu::ShaderPermutationMatrix for #name #ty_generics #where_clause {
             #[allow(unused_mut, unused_assignments)]
             fn flatten(&self) -> usize {
                 let mut index: usize = 0;

@@ -1,3 +1,3 @@
-use rhi::*;
+use gpu::*;
 
 shader!(TriangleShader, "triangle.slang");

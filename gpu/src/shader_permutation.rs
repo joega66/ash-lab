@@ -7,7 +7,7 @@ pub trait ShaderDefine {
 /// Give a shader permutation dimension its preprocessor define name.
 /// Example usage:
 /// ```
-/// use rhi::shader_define;
+/// use gpu::shader_define;
 /// shader_define!(EnableShadows, "ENABLE_SHADOWS");
 /// ```
 #[macro_export]
@@ -215,8 +215,8 @@ impl<D: ShaderDefine, E: ShaderPermutationEnum> ShaderPermutationDimension
 /// variant's identifier as its define value.
 /// Example usage:
 /// ```
-/// use rhi_reflect::{ShaderPermutation};
-/// use rhi::{shader_permutation_enum};
+/// use gpu_reflect::{ShaderPermutation};
+/// use gpu::{shader_permutation_enum};
 /// #[derive(Clone, Copy, PartialEq)]
 /// enum LightingModel {
 ///     Phong,
@@ -248,8 +248,8 @@ macro_rules! shader_permutation_enum {
 ///
 /// Example usage:
 /// ```
-/// use rhi_reflect::{ShaderPermutation};
-/// use rhi::{shader_define, ShaderPermutationBool, ShaderPermutationInt};
+/// use gpu_reflect::{ShaderPermutation};
+/// use gpu::{shader_define, ShaderPermutationBool, ShaderPermutationInt};
 /// shader_define!(EnableShadows, "ENABLE_SHADOWS");
 /// shader_define!(CascadeCount, "CASCADE_COUNT");
 ///

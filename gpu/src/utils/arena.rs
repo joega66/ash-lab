@@ -1,6 +1,6 @@
 use std::{
     hash::{Hash, Hasher},
-    marker::{PhantomData},
+    marker::PhantomData,
 };
 
 pub struct Handle<T> {

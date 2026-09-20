@@ -45,11 +45,30 @@ impl Dim for usize {
     }
 }
 
+/// A dimension whose extent is part of its type.
+///
+/// Implemented by [`Const<N>`] and by a [`Prod`] of two static dimensions, and deliberately not by
+/// `usize`. A bound on this trait is what turns "this dimension is only known at run time" into a
+/// compile error where the caller asks for it, rather than a `None` handed back at run time.
+pub trait ConstDim: Dim {
+    /// This dimension's compile-time extent.
+    const VALUE: usize;
+}
+
+impl<const N: usize> ConstDim for Const<N> {
+    const VALUE: usize = N;
+}
+
 /// The product of two dimensions, static whenever both of its operands are.
 ///
 /// [`row_major`](crate::row_major) and [`col_major`](crate::col_major) build strides out of these,
 /// so a stride over static dimensions is itself a zero-sized compile-time constant, and a stride
 /// that happens to mix in a runtime dimension degrades to a single multiply.
+///
+/// `repr(C)` for the same reason as [`Layout`](crate::Layout): these reach the GPU inside a stride,
+/// where they have to be the `Prod` of `shaders/src/layout.slang` byte for byte, and `repr(Rust)`
+/// is free to swap the two halves whenever they differ in size.
+#[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Prod<A, B>(pub A, pub B);
 
@@ -67,6 +86,10 @@ impl<A: Dim, B: Dim> Dim for Prod<A, B> {
             None => self.0.value() * self.1.value(),
         }
     }
+}
+
+impl<A: ConstDim, B: ConstDim> ConstDim for Prod<A, B> {
+    const VALUE: usize = A::VALUE * B::VALUE;
 }
 
 /// Product of a list of per-dimension compile-time extents, or `None` if any of them is dynamic.

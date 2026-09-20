@@ -166,14 +166,6 @@ impl<T: ShaderType> From<&DeviceBuffer<T>> for RWDeviceAddress<T> {
     }
 }
 
-/// Cast a DeviceBuffer to DeviceAddress/RWDeviceAddress
-#[macro_export]
-macro_rules! address {
-    ($buffer:expr) => {
-        (&$buffer).into()
-    };
-}
-
 impl<T: ShaderType> ShaderType for DeviceAddress<T> {
     fn type_layout() -> TypeLayout {
         TypeLayout::DeviceAddress {

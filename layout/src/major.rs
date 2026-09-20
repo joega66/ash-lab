@@ -14,7 +14,7 @@ pub trait RowMajor: Shape {
     fn row_major_stride(self) -> Self::Stride;
 }
 
-/// Shapes that can be given column-major (Fortran-order) strides: the leftmost dimension has
+/// Shapes that can be given column-major (glm-order) strides: the leftmost dimension has
 /// stride 1 and each following dimension has stride equal to the product of all preceding ones.
 pub trait ColMajor: Shape {
     /// The column-major stride tuple for this shape.
@@ -30,30 +30,21 @@ pub type RowMajorLayout<S> = Layout<S, <S as RowMajor>::Stride>;
 /// A column-major layout over `S`.
 pub type ColMajorLayout<S> = Layout<S, <S as ColMajor>::Stride>;
 
-/// Builds a row-major layout, where the last dimension varies fastest in memory (the C and Python
-/// default).
+/// Creates a row-major layout from a shape Coord.
+/// Row-major means the rightmost dimension has stride 1, and each preceding dimension has
+/// stride equal to the product of all following dimensions.
 ///
-/// ```
-/// use layout::{Const, row_major};
-///
-/// // A 3 x N row of tiles: the leading extent is static, the trailing one is not.
-/// let l = row_major((Const::<3>, 7usize));
-/// assert_eq!(l.crd2idx([2, 4]), 2 * 7 + 4);
-/// ```
+/// For shape(M, N, K):
+///     row_major strides : (N*K, K, 1)
+///     col_major strides : (1, M, M*N)
 #[inline]
 pub fn row_major<S: RowMajor>(shape: S) -> RowMajorLayout<S> {
     Layout::new(shape, shape.row_major_stride())
 }
 
-/// Builds a column-major layout, where the first dimension varies fastest in memory (the Fortran
-/// and MATLAB default).
-///
-/// ```
-/// use layout::{Const, col_major};
-///
-/// let l = col_major((Const::<3>, Const::<4>));
-/// assert_eq!(l.crd2idx([2, 1]), 2 + 1 * 3);
-/// ```
+/// Create a column-major layout from variadic arguments.
+/// Column-major means the first dimension has stride 1, and each subsequent dimension has
+/// stride equal to the product of all previous dimensions.
 #[inline]
 pub fn col_major<S: ColMajor>(shape: S) -> ColMajorLayout<S> {
     Layout::new(shape, shape.col_major_stride())
@@ -99,22 +90,6 @@ impl_major!(
     A0, A1, A2, A3, A4;
     [A1 A2 A3 A4], [A2 A3 A4], [A3 A4], [A4], []
 );
-impl_major!(
-    RowMajor::row_major_stride;
-    A0, A1, A2, A3, A4, A5;
-    [A1 A2 A3 A4 A5], [A2 A3 A4 A5], [A3 A4 A5], [A4 A5], [A5], []
-);
-impl_major!(
-    RowMajor::row_major_stride;
-    A0, A1, A2, A3, A4, A5, A6;
-    [A1 A2 A3 A4 A5 A6], [A2 A3 A4 A5 A6], [A3 A4 A5 A6], [A4 A5 A6], [A5 A6], [A6], []
-);
-impl_major!(
-    RowMajor::row_major_stride;
-    A0, A1, A2, A3, A4, A5, A6, A7;
-    [A1 A2 A3 A4 A5 A6 A7], [A2 A3 A4 A5 A6 A7], [A3 A4 A5 A6 A7], [A4 A5 A6 A7], [A5 A6 A7],
-    [A6 A7], [A7], []
-);
 
 // Column-major: stride i is the product of the dimensions before i.
 impl_major!(ColMajor::col_major_stride; A0; []);
@@ -125,20 +100,4 @@ impl_major!(
     ColMajor::col_major_stride;
     A0, A1, A2, A3, A4;
     [], [A0], [A0 A1], [A0 A1 A2], [A0 A1 A2 A3]
-);
-impl_major!(
-    ColMajor::col_major_stride;
-    A0, A1, A2, A3, A4, A5;
-    [], [A0], [A0 A1], [A0 A1 A2], [A0 A1 A2 A3], [A0 A1 A2 A3 A4]
-);
-impl_major!(
-    ColMajor::col_major_stride;
-    A0, A1, A2, A3, A4, A5, A6;
-    [], [A0], [A0 A1], [A0 A1 A2], [A0 A1 A2 A3], [A0 A1 A2 A3 A4], [A0 A1 A2 A3 A4 A5]
-);
-impl_major!(
-    ColMajor::col_major_stride;
-    A0, A1, A2, A3, A4, A5, A6, A7;
-    [], [A0], [A0 A1], [A0 A1 A2], [A0 A1 A2 A3], [A0 A1 A2 A3 A4], [A0 A1 A2 A3 A4 A5],
-    [A0 A1 A2 A3 A4 A5 A6]
 );

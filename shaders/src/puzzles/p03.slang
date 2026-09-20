@@ -1,5 +1,5 @@
 [SpecializationConstant]
-const uint grid_size_x = 1;
+const uint block_dim_x = 1;
 
 struct Add10GuardPush {
     float *output;
@@ -9,7 +9,7 @@ struct Add10GuardPush {
 [vk::push_constant]
 Add10GuardPush pc;
 
-[numthreads(grid_size_x, 1, 1)]
+[numthreads(block_dim_x, 1, 1)]
 void main(uint thread_id: SV_GroupThreadID) {
     if (thread_id >= pc.len) {
         return;

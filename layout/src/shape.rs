@@ -1,15 +1,8 @@
-//! Fixed-rank tuples of [`Dim`]s, used for both shapes and strides.
-
 use core::fmt;
 
 use crate::dim::{Dim, all_static, static_product};
 
 /// A rank-N tuple of dimensions, e.g. `(Const<4>, usize)` for a 4 x N shape.
-///
-/// The rank is the tuple's arity, so it is always known at compile time, while each individual
-/// dimension may be static ([`Const<N>`](crate::Const)) or dynamic (`usize`). `Coords` is the
-/// matching `[usize; RANK]` coordinate type, which also serves as the crate's compile-time rank
-/// check: a [`Layout`](crate::Layout) requires its stride to have the same `Coords` as its shape.
 pub trait Shape: Copy {
     /// Number of dimensions.
     const RANK: usize;
@@ -79,9 +72,6 @@ pub trait Shape: Copy {
 }
 
 /// Typed access to one dimension of a [`Shape`], preserving whether it is static.
-///
-/// `(Const<4>, usize)::dim_at::<0>()` gives back a zero-sized `Const<4>`, not a `usize`, so
-/// compile-time extents stay compile-time when they are pulled out of a shape.
 pub trait DimAt<const I: usize>: Shape {
     /// The type of dimension `I`.
     type Dim: Dim;
@@ -152,30 +142,9 @@ impl_shape!(2; A0, A1; 0, 1; A1, A0; 1, 0);
 impl_shape!(3; A0, A1, A2; 0, 1, 2; A2, A1, A0; 2, 1, 0);
 impl_shape!(4; A0, A1, A2, A3; 0, 1, 2, 3; A3, A2, A1, A0; 3, 2, 1, 0);
 impl_shape!(5; A0, A1, A2, A3, A4; 0, 1, 2, 3, 4; A4, A3, A2, A1, A0; 4, 3, 2, 1, 0);
-impl_shape!(6; A0, A1, A2, A3, A4, A5; 0, 1, 2, 3, 4, 5; A5, A4, A3, A2, A1, A0; 5, 4, 3, 2, 1, 0);
-impl_shape!(
-    7;
-    A0, A1, A2, A3, A4, A5, A6;
-    0, 1, 2, 3, 4, 5, 6;
-    A6, A5, A4, A3, A2, A1, A0;
-    6, 5, 4, 3, 2, 1, 0
-);
-impl_shape!(
-    8;
-    A0, A1, A2, A3, A4, A5, A6, A7;
-    0, 1, 2, 3, 4, 5, 6, 7;
-    A7, A6, A5, A4, A3, A2, A1, A0;
-    7, 6, 5, 4, 3, 2, 1, 0
-);
 
 impl_dim_at!((A0); 0: A0);
 impl_dim_at!((A0, A1); 0: A0, 1: A1);
 impl_dim_at!((A0, A1, A2); 0: A0, 1: A1, 2: A2);
 impl_dim_at!((A0, A1, A2, A3); 0: A0, 1: A1, 2: A2, 3: A3);
 impl_dim_at!((A0, A1, A2, A3, A4); 0: A0, 1: A1, 2: A2, 3: A3, 4: A4);
-impl_dim_at!((A0, A1, A2, A3, A4, A5); 0: A0, 1: A1, 2: A2, 3: A3, 4: A4, 5: A5);
-impl_dim_at!((A0, A1, A2, A3, A4, A5, A6); 0: A0, 1: A1, 2: A2, 3: A3, 4: A4, 5: A5, 6: A6);
-impl_dim_at!(
-    (A0, A1, A2, A3, A4, A5, A6, A7);
-    0: A0, 1: A1, 2: A2, 3: A3, 4: A4, 5: A5, 6: A6, 7: A7
-);

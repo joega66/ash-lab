@@ -1,8 +1,8 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 use ash::vk;
 use ash::vk::TaggedStructure;
+use gpu::*;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use rhi::*;
 use shaders::*;
 use std::collections::HashSet;
 use winit::{

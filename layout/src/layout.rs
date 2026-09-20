@@ -1,36 +1,16 @@
-//! The [`Layout`] type: a shape/stride pair mapping logical coordinates to linear indices.
-
 use core::fmt;
 
-use crate::dim::{all_static, static_cosize};
+use crate::dim::{ConstDim, all_static, static_cosize};
 use crate::shape::{DimAt, Shape};
 
-/// A mapping from logical coordinates to a linear memory index, defined by a shape and a stride.
+/// A layout that supports mixed compile-time and runtime dimensions.
 ///
-/// The rank is the arity of the shape tuple and so is always known at compile time, while each
-/// dimension is independently static ([`Const<N>`](crate::Const)) or dynamic (`usize`). A layout
-/// over entirely static dimensions is zero-sized and every query on it — [`size`](Self::size),
-/// [`cosize`](Self::cosize), [`crd2idx`](Self::crd2idx) — folds to constants; mixing in a runtime
-/// dimension only makes the terms that depend on it dynamic.
+/// This layout provides a unified interface for layouts where some dimensions
+//  are known at compile time and others are determined at runtime. It enables
+/// more ergonomic layout definitions while maintaining performance.
 ///
-/// The stride's `Coords` is tied to the shape's, which is how equal ranks are enforced at compile
-/// time.
-///
-/// ```
-/// use layout::{Const, Layout, row_major};
-///
-/// // 4 x 8, row-major: index (i, j) lives at 8i + j.
-/// let l = row_major((Const::<4>, Const::<8>));
-/// assert_eq!(l.crd2idx([1, 3]), 11);
-/// assert_eq!(l.size(), 32);
-/// assert_eq!(size_of_val(&l), 0);
-///
-/// // The same mapping with a runtime column count.
-/// let n = 8;
-/// let l = row_major((Const::<4>, n));
-/// assert_eq!(l.crd2idx([1, 3]), 11);
-/// assert_eq!(Layout::<(Const<4>, usize), (usize, Const<1>)>::STATIC_PRODUCT, None);
-/// ```
+/// A Layout's shape and strides must be non-negative.
+#[repr(C)]
 #[derive(Copy, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Layout<S, D> {
     /// The logical coordinate space.
@@ -52,18 +32,15 @@ impl<S: Shape, D: Shape<Coords = S::Coords>> Layout<S, D> {
     pub const RANK: usize = S::RANK;
 
     /// Number of dimensions after flattening nested coordinates.
-    ///
-    /// This crate's shapes are flat, so this is always [`RANK`](Self::RANK); it exists so code
-    /// ported from Mojo keeps reading the same.
     pub const FLAT_RANK: usize = S::RANK;
 
-    /// Whether every shape dimension is known at compile time.
+    /// Whether all shape dimensions are known at compile time.
     pub const SHAPE_KNOWN: bool = S::ALL_KNOWN;
 
-    /// Whether every stride dimension is known at compile time.
+    /// Whether all stride dimensions are known at compile time.
     pub const STRIDE_KNOWN: bool = D::ALL_KNOWN;
 
-    /// Whether every shape *and* stride dimension is known at compile time.
+    /// Whether all shape *and* stride dimensions are known at compile time.
     pub const ALL_DIMS_KNOWN: bool = all_static(S::STATIC) && all_static(D::STATIC);
 
     /// Compile-time product of all shape dimensions, or `None` if any of them is dynamic.
@@ -73,82 +50,64 @@ impl<S: Shape, D: Shape<Coords = S::Coords>> Layout<S, D> {
     /// dynamic.
     pub const STATIC_COSIZE: Option<usize> = static_cosize(S::STATIC, D::STATIC);
 
-    /// Compile-time extent of shape dimension `i`, or `None` if it is a runtime value.
+    /// Returns the compile-time value of the i-th flattened shape dimension.
     #[inline]
-    pub const fn static_shape(i: usize) -> Option<usize> {
-        S::STATIC[i]
+    pub const fn static_shape<const I: usize>() -> usize
+    where
+        S: DimAt<I>,
+        <S as DimAt<I>>::Dim: ConstDim,
+    {
+        <<S as DimAt<I>>::Dim as ConstDim>::VALUE
     }
 
-    /// Compile-time value of stride dimension `i`, or `None` if it is a runtime value.
+    /// Returns the compile-time value of the i-th flattened stride dimension.
     #[inline]
-    pub const fn static_stride(i: usize) -> Option<usize> {
-        D::STATIC[i]
+    pub const fn static_stride<const I: usize>() -> usize
+    where
+        D: DimAt<I>,
+        <D as DimAt<I>>::Dim: ConstDim,
+    {
+        <<D as DimAt<I>>::Dim as ConstDim>::VALUE
     }
 
-    /// Number of dimensions, for when naming the layout's type to reach [`RANK`](Self::RANK) is
-    /// inconvenient.
+    /// The number of dimensions in the layout.
     #[inline]
     pub fn rank(&self) -> usize {
         S::RANK
     }
 
-    /// The full shape.
+    /// Returns the full shape as a Coord.
     #[inline]
     pub fn shape_coord(&self) -> S {
         self.shape
     }
 
-    /// The full stride.
+    /// Returns the full stride as a Coord.
     #[inline]
     pub fn stride_coord(&self) -> D {
         self.stride
     }
 
-    /// The extent of shape dimension `i`.
-    #[inline]
-    pub fn shape_at(&self, i: usize) -> usize {
-        self.shape.get(i)
-    }
-
-    /// The value of stride dimension `i`.
-    #[inline]
-    pub fn stride_at(&self, i: usize) -> usize {
-        self.stride.get(i)
-    }
-
-    /// Shape dimension `I`, keeping its static-ness: this gives back a zero-sized
-    /// [`Const<N>`](crate::Const) for a compile-time dimension.
-    #[inline]
-    pub fn shape_dim<const I: usize>(&self) -> <S as DimAt<I>>::Dim
-    where
-        S: DimAt<I>,
-    {
-        self.shape.dim_at()
-    }
-
-    /// Stride dimension `I`, keeping its static-ness.
-    #[inline]
-    pub fn stride_dim<const I: usize>(&self) -> <D as DimAt<I>>::Dim
-    where
-        D: DimAt<I>,
-    {
-        self.stride.dim_at()
-    }
-
-    /// Total number of elements in the layout's domain.
+    /// Returns the total number of elements in the layout's domain.
+    ///
+    /// For a layout with shape(m, n), this returns m*n, representing the total
+    /// number of valid coordinates in the layout.
     #[inline]
     pub fn product(&self) -> usize {
         self.shape.product()
     }
 
-    /// Total number of elements in the layout's domain. Alias for [`product`](Self::product).
+    /// Returns the total number of elements in the layout's domain.
+    /// Alias for `product()`.
     #[inline]
     pub fn size(&self) -> usize {
         self.product()
     }
 
-    /// Size of the memory region the layout spans: `(m - 1) * r + (n - 1) * s + 1` for shape
-    /// `(m, n)` and stride `(r, s)`, or 0 for an empty domain.
+    /// Returns the size of the memory region spanned by the layout.
+    ///
+    /// For a layout with `shape(m, n)` and `stride(r, s)`, this returns `(m - 1) * r + (n - 1) * s + 1`,
+    /// representing the memory footprint.
     #[inline]
     pub fn cosize(&self) -> usize {
         if let Some(n) = Self::STATIC_COSIZE {
@@ -166,7 +125,11 @@ impl<S: Shape, D: Shape<Coords = S::Coords>> Layout<S, D> {
         acc
     }
 
-    /// Maps logical coordinates to a linear memory index.
+    /// Converts multi-dimensional coordinates to a linear index.
+    ///
+    /// This function is the inverse of `idx2crd` , transforming a set of coordinates into a flat index
+    /// based on the provided shape and stride information. This is essential for mapping multi-
+    /// dimensional tensor elements to linear memory.
     #[inline]
     pub fn crd2idx(&self, crd: S::Coords) -> usize {
         let stride = self.stride.dims();
@@ -177,18 +140,9 @@ impl<S: Shape, D: Shape<Coords = S::Coords>> Layout<S, D> {
         idx
     }
 
-    /// Maps logical coordinates to a linear memory index. The equivalent of Mojo's `__call__`.
-    #[inline]
-    pub fn call(&self, crd: S::Coords) -> usize {
-        self.crd2idx(crd)
-    }
-
-    /// Inverse of [`crd2idx`](Self::crd2idx): maps a linear index back to logical coordinates via
-    /// `crd[i] = (idx / stride[i]) % shape[i]`.
-    ///
-    /// This is exact for layouts that are injective over their domain; for others it returns the
-    /// representative coordinate the formula yields. A zero stride is treated as 1 so that
-    /// broadcast dimensions do not divide by zero.
+    /// Converts a linear index to multi-dimensional coordinates. This function transforms a flat
+    /// index into coordinate values based on the provided shape and stride information. This is
+    /// essential for mapping linear memory accesses to multi-dimensional tensor elements.
     #[inline]
     pub fn idx2crd(&self, idx: usize) -> S::Coords {
         let shape = self.shape.dims();
@@ -199,6 +153,46 @@ impl<S: Shape, D: Shape<Coords = S::Coords>> Layout<S, D> {
             crd.as_mut()[i] = if s == 0 { 0 } else { (idx / d.max(1)) % s };
         }
         crd
+    }
+
+    /// Reverse the order of dimensions in the layout.
+    /// Turns row-major into column-major ordering where the stride-1 dimension comes first,
+    /// enabling coalesced scalar iteration.
+    #[inline]
+    pub fn reverse(&self) -> Layout<S::Reversed, D::Reversed> {
+        Layout::new(self.shape.reversed(), self.stride.reversed())
+    }
+
+    /// Transposes the layout by reversing the order of dimensions.
+    /// For an n-dimensional layout, this reverses the order of both shapes and strides. For 2D layouts,
+    /// this swaps rows and columns, converting row-major to column-major and vice versa.
+    #[inline]
+    pub fn transpose(&self) -> Layout<S::Reversed, D::Reversed> {
+        self.reverse()
+    }
+
+    /// Convert all elements in shape and stride to Scalar<DType>.
+    #[inline]
+    pub fn make_dynamic(&self) -> Layout<S::Dynamic, D::Dynamic> {
+        Layout::new(self.shape.to_dynamic(), self.stride.to_dynamic())
+    }
+
+    /// Shape dimension `I`, keeping its static-ness.
+    #[inline]
+    pub fn shape_dim<const I: usize>(&self) -> <S as DimAt<I>>::Dim
+    where
+        S: DimAt<I>,
+    {
+        self.shape.dim_at()
+    }
+
+    /// Stride dimension `I`, keeping its static-ness.
+    #[inline]
+    pub fn stride_dim<const I: usize>(&self) -> <D as DimAt<I>>::Dim
+    where
+        D: DimAt<I>,
+    {
+        self.stride.dim_at()
     }
 
     /// Maps the `linear_idx`-th element of the domain, walked with the leftmost coordinate varying
@@ -226,24 +220,6 @@ impl<S: Shape, D: Shape<Coords = S::Coords>> Layout<S, D> {
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         (0..self.size()).map(move |i| self.linear2idx(i))
-    }
-
-    /// Reverses the dimension order, turning a row-major layout into a column-major one.
-    #[inline]
-    pub fn reverse(&self) -> Layout<S::Reversed, D::Reversed> {
-        Layout::new(self.shape.reversed(), self.stride.reversed())
-    }
-
-    /// Transposes the layout by reversing its dimensions; for rank 2 this swaps rows and columns.
-    #[inline]
-    pub fn transpose(&self) -> Layout<S::Reversed, D::Reversed> {
-        self.reverse()
-    }
-
-    /// Materializes every dimension as a runtime value, erasing compile-time extents.
-    #[inline]
-    pub fn make_dynamic(&self) -> Layout<S::Dynamic, D::Dynamic> {
-        Layout::new(self.shape.to_dynamic(), self.stride.to_dynamic())
     }
 
     /// Whether two layouts describe the same mapping, regardless of which dimensions each one

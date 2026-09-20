@@ -1,4 +1,4 @@
-extern crate self as rhi;
+extern crate self as gpu;
 
 // Re-exported so `shader_module!` can expand to `$crate::inventory::submit!`
 // from any downstream crate without that crate needing its own `inventory` dependency.

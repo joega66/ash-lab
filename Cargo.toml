@@ -4,8 +4,8 @@ members = [
     "compiler",
     "dataset",
     "layout",
-    "rhi",
-    "rhi-reflect",
+    "gpu",
+    "gpu-reflect",
     "shaders",
     "viewer",
 ]

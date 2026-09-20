@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rhi = { path = "../rhi" }
-rhi-reflect = { path = "../rhi-reflect" }
+layout = { version = "0.1.0", path = "../layout" }
+gpu = { path = "../gpu" }
+gpu-reflect = { path = "../gpu-reflect" }

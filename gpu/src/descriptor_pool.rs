@@ -115,13 +115,8 @@ impl DescriptorSetAllocator {
         let mut pools = std::mem::take(&mut self.pools);
         let handle = (|| {
             for (pool, stats) in &mut pools {
-                let result = self.allocate_descriptor_set_from_pool(
-                    ctx,
-                    *pool,
-                    stats,
-                    &buffers,
-                    set_layout,
-                );
+                let result =
+                    self.allocate_descriptor_set_from_pool(ctx, *pool, stats, &buffers, set_layout);
                 match result {
                     Ok(handle) => {
                         return Some(handle);

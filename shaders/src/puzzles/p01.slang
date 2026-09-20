@@ -1,5 +1,5 @@
 [SpecializationConstant]
-const uint grid_size_x = 1;
+const uint block_dim_x = 1;
 
 struct Add10Push {
     float *output;
@@ -8,7 +8,7 @@ struct Add10Push {
 [vk::push_constant]
 Add10Push pc;
 
-[numthreads(grid_size_x, 1, 1)]
+[numthreads(block_dim_x, 1, 1)]
 void main(uint thread_id: SV_GroupThreadID) {
-    pc.output[thread_id] = pc.a[thread_id] + 10;
+    pc.output[thread_id] = pc.a[thread_id] + 10.0;
 }

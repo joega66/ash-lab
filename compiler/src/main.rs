@@ -1,4 +1,4 @@
-use rhi::*;
+use gpu::*;
 use std::assert_eq;
 use std::fs;
 use std::path::Path;

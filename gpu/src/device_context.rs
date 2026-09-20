@@ -1438,7 +1438,7 @@ impl DeviceContext {
     unsafe fn create_shaders(device: &Device) -> HashMap<TypeId, ShaderModuleArray> {
         let mut shaders = HashMap::new();
 
-        for (k, shader) in rhi::ShaderModuleRegistry::collect().iter() {
+        for (k, shader) in gpu::ShaderModuleRegistry::collect().iter() {
             let mut shader_vec = Vec::new();
             shader_vec.resize(
                 shader.total_permutations(),
@@ -2062,6 +2062,10 @@ impl<T> DeviceBuffer<T> {
     pub fn len(&self) -> usize {
         self.size() / std::mem::size_of::<T>()
     }
+
+    pub fn as_ref(&self) -> &Self {
+        self
+    }
 }
 
 impl<T> Clone for DeviceBuffer<T> {
@@ -2090,6 +2094,12 @@ pub struct HostMappedMemory<'a, T> {
     allocation: vk_mem::Allocation,
     raw: &'a [T],
     ctx: &'a DeviceContext,
+}
+
+impl<'a, T> HostMappedMemory<'a, T> {
+    pub fn len(&self) -> usize {
+        self.raw.len()
+    }
 }
 
 impl<T> Index<usize> for HostMappedMemory<'_, T> {

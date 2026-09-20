@@ -306,7 +306,7 @@ dependencies = [
 name = "compiler"
 version = "0.1.0"
 dependencies = [
- "rhi",
+ "gpu",
  "shaders",
 ]
 
@@ -579,6 +579,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpu"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "ash-window",
+ "bytemuck",
+ "gpu-reflect",
+ "image 0.24.9",
+ "inventory",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "vk-mem",
+ "winit",
+]
+
+[[package]]
+name = "gpu-reflect"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -739,8 +765,8 @@ dependencies = [
 name = "layout"
 version = "0.1.0"
 dependencies = [
- "rhi",
- "rhi-reflect",
+ "gpu",
+ "gpu-reflect",
 ]
 
 [[package]]
@@ -1312,32 +1338,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rhi"
-version = "0.1.0"
-dependencies = [
- "ash",
- "ash-window",
- "bytemuck",
- "image 0.24.9",
- "inventory",
- "raw-window-handle",
- "rhi-reflect",
- "serde",
- "serde_json",
- "vk-mem",
- "winit",
-]
-
-[[package]]
-name = "rhi-reflect"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1459,8 +1459,9 @@ dependencies = [
 name = "shaders"
 version = "0.1.0"
 dependencies = [
- "rhi",
- "rhi-reflect",
+ "gpu",
+ "gpu-reflect",
+ "layout",
 ]
 
 [[package]]
@@ -1714,9 +1715,9 @@ dependencies = [
  "ash-window",
  "bytemuck",
  "cgmath",
+ "gpu",
+ "gpu-reflect",
  "raw-window-handle",
- "rhi",
- "rhi-reflect",
  "shaders",
  "winit",
 ]

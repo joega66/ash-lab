@@ -24,6 +24,9 @@ fn workspace_target_dir(start: &Path) -> PathBuf {
     }
 }
 
+/// The shader path is relative to the directory of the `.rs` file that declares it, so
+/// a shader sits next to its declaring module rather than at the top of `src`.
+///
 /// Example usage:
 /// shader!(MyShader, "MyShader.slang")
 /// shader!(MyShader, "MyShader.slang", MyShaderPermutations)
@@ -32,9 +35,36 @@ pub trait DynShaderModuleLike {
 
     fn relative_path(&self) -> &'static str;
 
+    /// The `.rs` file that declared this shader, as `file!()` reports it.
+    fn source_file(&self) -> &'static str;
+
+    /// The directory of [`Self::source_file`], relative to the crate's `src`, which is
+    /// what [`Self::relative_path`] and the compiled artifacts are laid out against.
+    /// Empty for a shader declared directly in `src`.
+    ///
+    /// `file!()` is relative to whichever directory cargo invoked rustc from — the
+    /// workspace root, not the crate root — so it is anchored on its `src` component
+    /// rather than joined onto a guessed base.
+    fn source_dir(&self) -> PathBuf {
+        let source_file = Path::new(self.source_file());
+        let mut components = source_file.components();
+        let found_src = components.any(|component| component.as_os_str() == "src");
+        assert!(
+            found_src,
+            "{} is not under a `src` directory",
+            source_file.display(),
+        );
+        let under_src = components.collect::<PathBuf>();
+        under_src
+            .parent()
+            .expect("source file has no parent")
+            .to_path_buf()
+    }
+
     fn full_path(&self) -> PathBuf {
         Path::new(self.manifest_dir())
             .join("src")
+            .join(self.source_dir())
             .join(self.relative_path())
     }
 
@@ -60,8 +90,10 @@ pub trait DynShaderModuleLike {
         true
     }
 
+    /// Mirrors the source layout under [`Self::build_dir`], so that shaders sharing a
+    /// file name in different modules compile to distinct artifacts.
     fn spirv_file_name(&self, index: usize) -> PathBuf {
-        let relative_path = Path::new(self.relative_path());
+        let relative_path = self.source_dir().join(self.relative_path());
         let mut new_file_name = relative_path
             .file_stem()
             .expect("missing file stem")
@@ -109,6 +141,9 @@ macro_rules! shader {
             }
             fn relative_path(&self) -> &'static str {
                 $path
+            }
+            fn source_file(&self) -> &'static str {
+                file!()
             }
             fn total_permutations(&self) -> usize {
                 $crate::ShaderModuleLike::total_permutations(self)

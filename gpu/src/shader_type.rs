@@ -598,6 +598,11 @@ fn check_fields(
                 &field_path,
                 "shader field is not laid out in a uniform buffer".to_string(),
             )),
+            // A field that occupies no bytes gets no binding at all. Slang does this for an empty
+            // struct, which is how a compile-time dimension is spelled on both sides — `Const<N>`
+            // is fieldless here and zero-sized in Rust. There is no offset or size to compare, so
+            // the only thing to insist on is that the host agrees the field is empty.
+            None if field.ty.size() == 0 => {}
             None => mismatches.push(mismatch(
                 &field_path,
                 "shader field has no binding information".to_string(),

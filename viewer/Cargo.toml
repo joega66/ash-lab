@@ -9,7 +9,7 @@ ash-window = { git = "https://github.com/ash-rs/ash" }
 bytemuck = { version = "1.24", features = ["derive"] }
 cgmath = "0.18"
 raw-window-handle = "0.6.2"
-rhi = { path = "../rhi" }
-rhi-reflect = { path = "../rhi-reflect" }
+gpu = { path = "../gpu" }
+gpu-reflect = { path = "../gpu-reflect" }
 shaders = { path = "../shaders" }
 winit = "0.30.13"
