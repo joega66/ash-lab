@@ -45,10 +45,10 @@ mod test {
         ctx.enqueue_fill(&out, 0_f32);
 
         let a = ctx.enqueue_create_buffer("a", SIZE);
-        ctx.enqueue_copy(a_host.as_slice(), &a);
+        ctx.enqueue_copy(&a_host, &a);
 
         let b = ctx.enqueue_create_buffer("b", SIZE);
-        ctx.enqueue_copy(b_host.as_slice(), &b);
+        ctx.enqueue_copy(&b_host, &b);
 
         let add = ctx.compile_function::<Add>(
             &(),

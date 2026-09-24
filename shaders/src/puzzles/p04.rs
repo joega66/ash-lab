@@ -75,7 +75,7 @@ mod test {
         }
 
         let a = ctx.enqueue_create_buffer("a", SIZE * SIZE);
-        ctx.enqueue_copy(a_host.as_slice(), &a);
+        ctx.enqueue_copy(&a_host, &a);
 
         let a_tensor = TileTensor::new(a, layout);
 

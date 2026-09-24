@@ -40,7 +40,7 @@ mod test {
         ctx.enqueue_fill(&out, 0_f32);
 
         let a = ctx.enqueue_create_buffer("a", SIZE);
-        ctx.enqueue_copy(a_host.as_slice(), &a);
+        ctx.enqueue_copy(&a_host, &a);
 
         let add_10_guard = ctx.compile_function::<Add10Guard>(
             &(),

@@ -2677,3 +2677,12 @@ where
         <&[T] as EnqueueCopyable<T>>::enqueue_copy(ctx, src_ptr.as_slice(), dst_buf);
     }
 }
+
+impl<T> EnqueueCopyable<T> for &Vec<T>
+where
+    T: bytemuck::Pod,
+{
+    fn enqueue_copy(ctx: &mut DeviceContext, src_ptr: Self, dst_buf: &DeviceBuffer<T>) {
+        <&[T] as EnqueueCopyable<T>>::enqueue_copy(ctx, src_ptr.as_slice(), dst_buf);
+    }
+}
