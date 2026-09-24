@@ -90,23 +90,23 @@ impl<T> Arena<T> {
         }
     }
 
-    pub fn get(&self, id: Handle<T>) -> Option<&T> {
-        let slot = self.slots.get(id.index as usize)?;
-        if slot.generation != id.generation {
+    pub fn get(&self, handle: Handle<T>) -> Option<&T> {
+        let slot = self.slots.get(handle.index as usize)?;
+        if slot.generation != handle.generation {
             return None;
         }
         slot.value.as_ref()
     }
 
-    pub fn remove(&mut self, id: Handle<T>) -> Option<T> {
-        let slot = self.slots.get_mut(id.index as usize)?;
-        if slot.generation != id.generation {
+    pub fn remove(&mut self, handle: Handle<T>) -> Option<T> {
+        let slot = self.slots.get_mut(handle.index as usize)?;
+        if slot.generation != handle.generation {
             return None;
         }
         let value = slot.value.take()?;
-        // Bump on free, so every id previously handed out for this slot is stale.
+        // Bump on free, so every handle previously handed out for this slot is stale.
         slot.generation = slot.generation.wrapping_add(1);
-        self.free.push(id.index);
+        self.free.push(handle.index);
         Some(value)
     }
 

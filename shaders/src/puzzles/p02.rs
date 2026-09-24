@@ -41,8 +41,8 @@ mod test {
             expected.push(val + val);
         }
 
-        let output = ctx.enqueue_create_buffer("output", SIZE);
-        ctx.enqueue_fill(&output, 0_f32);
+        let out = ctx.enqueue_create_buffer("out", SIZE);
+        ctx.enqueue_fill(&out, 0_f32);
 
         let a = ctx.enqueue_create_buffer("a", SIZE);
         ctx.enqueue_copy(a_host.as_slice(), &a);
@@ -61,27 +61,27 @@ mod test {
             ctx,
             func: &add,
             push: AddPush {
-                output: output.as_ref().into(),
+                output: out.as_ref().into(),
                 a: a.as_ref().into(),
                 b: b.as_ref().into(),
             },
             grid_dim: UInt3::new(a.len() as u32, 1, 1),
         );
 
-        let output_host = ctx.create_host_buffer("output_host", SIZE);
-        ctx.enqueue_copy(&output, &output_host);
+        let out_host = ctx.create_host_buffer("out_host", SIZE);
+        ctx.enqueue_copy(&out, &out_host);
 
         ctx.execute(None).expect("failed to execute");
 
         ctx.synchronize();
 
-        let output_host = output_host.map_to_host(&ctx);
+        let out_host = out_host.map_to_host(&ctx);
 
         for i in 0..SIZE {
-            assert_eq!(expected[i], output_host[i]);
+            assert_eq!(expected[i], out_host[i]);
         }
 
-        println!("output: {:?}", output_host);
+        println!("out: {:?}", out_host);
         println!("expected: {:?}", expected);
         println!("Puzzle 02 complete ✅")
     }

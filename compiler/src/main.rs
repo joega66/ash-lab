@@ -33,15 +33,15 @@ fn check_element_layout(parameter: &ShaderParameterType, reflected: &Type, shade
     }
 }
 
-/// Checks a device function's `PushConstant` type against the `[vk::push_constant]`
-/// block the shader declared, or `None` when the shader declared none.
+/// Checks a device function's `PushConstant` type against the push constant the shader
+/// declared, or `None` when it declared none.
 fn check_push_constant_layout(
     function: &dyn DynDeviceFunctionLike,
-    expected: Option<&Parameter>,
+    expected: Option<&Type>,
     shader: &Path,
 ) {
     let host = function.push_constant_layout();
-    let result = host.check_push_constant(expected.map(|parameter| &parameter.ty));
+    let result = host.check_push_constant(expected);
 
     if let Err(mismatches) = result {
         panic!(
@@ -73,10 +73,75 @@ fn check_spec_constant_layout(
     }
 }
 
+/// The Slang type the shader binds its push constant to, or `None` when it declares none.
+///
+/// A non-generic shader declares a module-scope `[vk::push_constant]` global, which slangc
+/// reports as a binding on the entry point. A generic one cannot: a global cannot name the
+/// entry point's type parameters, so the push constant is a `uniform` entry-point parameter
+/// instead, and slangc reports it inline on the entry point. Both lower to the same SPIR-V
+/// push constant, so both are checked against the same host type.
+fn reflected_push_constant<'a>(
+    reflection: &'a ShaderReflection,
+    entry_point: &'a EntryPoint,
+    function: &dyn DynDeviceFunctionLike,
+    shader: &Path,
+) -> Option<&'a Type> {
+    let mut found: Option<&Type> = None;
+
+    for binding in &entry_point.bindings {
+        let Binding::PushConstantBuffer { index } = binding.binding else {
+            continue;
+        };
+        assert_eq!(index, 0, "only one push constant range is supported");
+        let parameter = reflection
+            .parameters
+            .iter()
+            .find(|x| x.name.as_deref() == Some(binding.name.as_str()))
+            .unwrap_or_else(|| panic!("missing binding {}", binding.name));
+        assert!(
+            found.replace(&parameter.ty).is_none(),
+            "{} declares more than one push constant",
+            shader.display(),
+        );
+    }
+
+    for parameter in &entry_point.parameters {
+        let Some(Binding::Uniform { offset, size, .. }) = parameter.binding else {
+            continue;
+        };
+        let name = parameter.name.as_deref().unwrap_or("<unnamed>");
+        // The host writes its push constant blob at offset 0 of the range, so the one
+        // uniform parameter has to start there.
+        assert_eq!(
+            offset,
+            0,
+            "the uniform parameter `{name}` of {} does not start the push constant block; a \
+             generic entry point takes exactly one `uniform` parameter",
+            shader.display(),
+        );
+        let host_size = function.push_constant_range_size();
+        assert!(
+            host_size <= size,
+            "the host push constant of {}:{} is {host_size} bytes, but the shader reserved \
+             {size} bytes for `{name}`",
+            shader.display(),
+            function.entry_point(),
+        );
+        assert!(
+            found.replace(&parameter.ty).is_none(),
+            "{} declares more than one push constant",
+            shader.display(),
+        );
+    }
+
+    found
+}
+
 fn main() {
     let shaders = ShaderModuleRegistry::collect();
+    let functions = DeviceFunctionRegistry::collect();
 
-    for (_, shader) in &shaders {
+    for (shader_type, shader) in &shaders {
         let src_path = &shader.full_path();
         let build_dir_path = shader.build_dir();
 
@@ -127,6 +192,24 @@ fn main() {
                 command.arg(&preprocessor_macro);
             }
 
+            let specialization_args = shader.specialization_args();
+            if !specialization_args.is_empty() {
+                let function = functions.get(shader_type).unwrap_or_else(|| {
+                    panic!(
+                        "{} is generic but has no device function to name its entry point",
+                        src_path.display(),
+                    )
+                });
+                command
+                    .arg("-entry")
+                    .arg(function.entry_point())
+                    .arg("-stage")
+                    .arg("compute");
+                for arg in specialization_args {
+                    command.arg("-specialize").arg(arg);
+                }
+            }
+
             let output = command.output().unwrap();
 
             if !output.status.success() {
@@ -165,10 +248,22 @@ fn main() {
                 .find(|x| x.name == function.entry_point())
                 .expect(&format!("missing entry point {}", function.entry_point()));
 
-            // The shader's `[vk::push_constant]` parameter, if it has one.
-            let mut expected_push_constant = None;
+            let expected_push_constant =
+                reflected_push_constant(&reflection, entry_point, function.as_ref(), &spirv_file_name);
 
             for binding in &entry_point.bindings {
+                // Handled above, against the entry point as a whole.
+                if let Binding::PushConstantBuffer { .. } = binding.binding {
+                    continue;
+                }
+
+                // Specialization constants are module-scope, so they are
+                // checked against the whole reflection below rather than one
+                // entry point binding at a time.
+                if let Binding::SpecializationConstant { .. } = binding.binding {
+                    continue;
+                }
+
                 let expected_parameter = reflection
                     .parameters
                     .iter()
@@ -179,23 +274,6 @@ fn main() {
                         *name == binding.name
                     })
                     .expect(&format!("missing binding {}", binding.name));
-
-                if let Binding::PushConstantBuffer { index } = binding.binding {
-                    assert_eq!(index, 0, "only one push constant range is supported");
-                    assert!(
-                        expected_push_constant.replace(expected_parameter).is_none(),
-                        "{} declares more than one push constant",
-                        spirv_file_name.display(),
-                    );
-                    continue;
-                }
-
-                // Specialization constants are module-scope, so they are
-                // checked against the whole reflection below rather than one
-                // entry point binding at a time.
-                if let Binding::SpecializationConstant { .. } = binding.binding {
-                    continue;
-                }
 
                 let (parameter, parameter_index) = parameter_types
                     .iter()

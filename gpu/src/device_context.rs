@@ -77,7 +77,7 @@ pub struct DeviceContext {
 
     buffers: Arena<DeviceBufferInner>,
 
-    rg: RgContext,
+    builder: DeviceGraphBuilder,
 
     pub device: DeviceOwner,
 
@@ -180,7 +180,7 @@ impl DeviceContext {
             shaders,
             functions,
             buffers: Arena::new(),
-            rg: RgContext::new(),
+            builder: DeviceGraphBuilder::new(),
             device: DeviceOwner::new(device),
             instance: InstanceOwner::new(instance),
             entry,
@@ -322,9 +322,9 @@ impl DeviceContext {
         let value = value.to_u32();
         self.enqueue_pass(
             "enqueue_fill",
-            &[RgBufferTransition {
+            &[DgBufferTransition {
                 buffer: input.buffer(),
-                kind: RgAccessKind::Write,
+                kind: DgAccessKind::Write,
                 stage: vk::PipelineStageFlags2::TRANSFER,
                 access: vk::AccessFlags2::TRANSFER_WRITE,
             }],
@@ -393,18 +393,18 @@ impl DeviceContext {
     pub fn enqueue_pass(
         &mut self,
         name: &str,
-        buffers: &[RgBufferTransition],
-        images: &[RgImageTransition],
+        buffers: &[DgBufferTransition],
+        images: &[DgImageTransition],
         function: Box<dyn Fn(&mut DeviceContext, vk::CommandBuffer)>,
     ) {
-        let pass_id = RgPassId(self.rg.passes.len());
+        let pass_id = DgPassId(self.builder.passes.len());
         let mut reads = Vec::new();
         let mut writes = Vec::new();
 
         for t in buffers {
             self.version_use(
                 pass_id,
-                RgResource::Buffer(t.buffer),
+                DgResource::Buffer(t.buffer),
                 t.kind,
                 &mut reads,
                 &mut writes,
@@ -413,16 +413,16 @@ impl DeviceContext {
         for t in images {
             self.version_use(
                 pass_id,
-                RgResource::Image(t.image),
+                DgResource::Image(t.image),
                 t.kind,
                 &mut reads,
                 &mut writes,
             );
         }
 
-        self.rg.passes.push(RgPass {
+        self.builder.passes.push(DgPass {
             name: name.into(),
-            barrier: RgPipelineBarrier {
+            barrier: DgPipelineBarrier {
                 buffers: buffers.to_vec(),
                 images: images.to_vec(),
             },
@@ -453,7 +453,7 @@ impl DeviceContext {
         let stage = vk::PipelineStageFlags2::COMPUTE_SHADER;
 
         // Derive buffer transitions from descriptor kinds.
-        let mut transitions: Vec<RgBufferTransition> = parameters
+        let mut transitions: Vec<DgBufferTransition> = parameters
             .iter()
             .map(|param| {
                 let buffer = self.buffers.get(param.handle).unwrap().buffer;
@@ -511,7 +511,7 @@ impl DeviceContext {
                             );
                             let handle = Handle::<DeviceBufferInner>::from_u64(raw);
                             let buffer = ctx.buffers.get(handle).unwrap();
-                            bytes[at..at + 8].copy_from_slice(&buffer.address().to_ne_bytes());
+                            bytes[at..at + 8].copy_from_slice(&buffer.address.to_ne_bytes());
                         }
                         bytes
                     };
@@ -616,47 +616,47 @@ impl DeviceContext {
 
     fn version_use(
         &mut self,
-        pass_id: RgPassId,
-        resource: RgResource,
-        kind: RgAccessKind,
-        reads: &mut Vec<RgVersion>,
-        writes: &mut Vec<RgVersion>,
+        pass_id: DgPassId,
+        resource: DgResource,
+        kind: DgAccessKind,
+        reads: &mut Vec<DgVersion>,
+        writes: &mut Vec<DgVersion>,
     ) {
-        let does_read = matches!(kind, RgAccessKind::Read | RgAccessKind::ReadWrite);
-        let does_write = matches!(kind, RgAccessKind::Write | RgAccessKind::ReadWrite);
+        let does_read = matches!(kind, DgAccessKind::Read | DgAccessKind::ReadWrite);
+        let does_write = matches!(kind, DgAccessKind::Write | DgAccessKind::ReadWrite);
 
         if does_read {
-            let rv = RgVersion {
+            let rv = DgVersion {
                 resource,
-                version: self.rg.versions.entry(resource).or_insert(0).clone(),
+                version: self.builder.versions.entry(resource).or_insert(0).clone(),
             };
-            if let Some(&prod) = self.rg.writers.get(&rv) {
+            if let Some(&prod) = self.builder.writers.get(&rv) {
                 self.add_edge(prod, pass_id); // RAW
             }
-            self.rg.readers.entry(rv).or_default().push(pass_id);
+            self.builder.readers.entry(rv).or_default().push(pass_id);
             reads.push(rv);
         }
 
         if does_write {
-            let old = RgVersion {
+            let old = DgVersion {
                 resource,
-                version: self.rg.versions.entry(resource).or_insert(0).clone(),
+                version: self.builder.versions.entry(resource).or_insert(0).clone(),
             };
-            if let Some(&prod) = self.rg.writers.get(&old) {
+            if let Some(&prod) = self.builder.writers.get(&old) {
                 self.add_edge(prod, pass_id); // WAW
             }
-            if let Some(prev_readers) = self.rg.readers.get(&old).cloned() {
+            if let Some(prev_readers) = self.builder.readers.get(&old).cloned() {
                 for r in prev_readers {
                     self.add_edge(r, pass_id); // WAR (self-edge skipped)
                 }
             }
-            let new_ver = self.rg.versions[&resource] + 1;
-            self.rg.versions.insert(resource, new_ver);
-            let nv = RgVersion {
+            let new_ver = self.builder.versions[&resource] + 1;
+            self.builder.versions.insert(resource, new_ver);
+            let nv = DgVersion {
                 resource,
                 version: new_ver,
             };
-            self.rg.writers.insert(nv, pass_id);
+            self.builder.writers.insert(nv, pass_id);
             writes.push(nv);
         }
     }
@@ -667,7 +667,7 @@ impl DeviceContext {
 
         self.garbage_collection();
 
-        self.rg = RgContext::new();
+        self.builder = DeviceGraphBuilder::new();
 
         result
     }
@@ -677,7 +677,7 @@ impl DeviceContext {
         let order = self.topological_sort()?;
 
         // Initialize state tracking.
-        let mut states = RgStates {
+        let mut states = DgStates {
             buffers: HashMap::new(),
             images: HashMap::new(),
         };
@@ -703,7 +703,7 @@ impl DeviceContext {
         }
 
         // Record commands.
-        let passes = std::mem::take(&mut self.rg.passes);
+        let passes = std::mem::take(&mut self.builder.passes);
         for pass_id in &order {
             let pass = &passes[pass_id.0];
 
@@ -728,7 +728,7 @@ impl DeviceContext {
             let prev = states
                 .images
                 .entry(present.image())
-                .or_insert(RgImageState::initial());
+                .or_insert(DgImageState::initial());
             if prev.layout != vk::ImageLayout::PRESENT_SRC_KHR {
                 let image_memory_barriers = [vk::ImageMemoryBarrier2::default()
                     .src_stage_mask(prev.stage)
@@ -777,24 +777,24 @@ impl DeviceContext {
         Ok(())
     }
 
-    fn add_edge(&mut self, from: RgPassId, to: RgPassId) {
+    fn add_edge(&mut self, from: DgPassId, to: DgPassId) {
         if from != to {
-            self.rg.edges.insert((from, to));
+            self.builder.edges.insert((from, to));
         }
     }
 
-    fn topological_sort(&self) -> Result<Vec<RgPassId>, String> {
+    fn topological_sort(&self) -> Result<Vec<DgPassId>, String> {
         // n passes
-        let n = self.rg.passes.len();
+        let n = self.builder.passes.len();
 
         // Initialize per-node indegree counts to 0.
         let mut in_degree = vec![0usize; n];
 
         // Initialize per-node adjacency lists. (Initially empty.)
-        let mut adj: Vec<Vec<RgPassId>> = vec![Vec::new(); n];
+        let mut adj: Vec<Vec<DgPassId>> = vec![Vec::new(); n];
 
         // For each edge:
-        for &(from, to) in &self.rg.edges {
+        for &(from, to) in &self.builder.edges {
             // Add dst node to src node's adjacency list.
             adj[from.0].push(to);
 
@@ -808,9 +808,9 @@ impl DeviceContext {
         }
 
         // Initialize queue with indegree 0 nodes
-        let mut queue: VecDeque<RgPassId> = (0..n)
+        let mut queue: VecDeque<DgPassId> = (0..n)
             .filter(|&i| in_degree[i] == 0)
-            .map(RgPassId)
+            .map(DgPassId)
             .collect();
 
         // Order to execute passes
@@ -842,7 +842,7 @@ impl DeviceContext {
     }
 
     fn merged_buffer_uses(
-        pass: &RgPass,
+        pass: &DgPass,
     ) -> Vec<(vk::Buffer, vk::PipelineStageFlags2, vk::AccessFlags2)> {
         let mut map: HashMap<vk::Buffer, (vk::PipelineStageFlags2, vk::AccessFlags2)> =
             HashMap::new();
@@ -859,7 +859,7 @@ impl DeviceContext {
     }
 
     fn merged_image_uses(
-        pass: &RgPass,
+        pass: &DgPass,
     ) -> Vec<(
         vk::Image,
         vk::ImageSubresourceRange,
@@ -898,8 +898,8 @@ impl DeviceContext {
 
     fn derive_barriers(
         &self,
-        states: &mut RgStates,
-        pass: &RgPass,
+        states: &mut DgStates,
+        pass: &DgPass,
     ) -> (
         Vec<vk::MemoryBarrier2<'_>>,
         Vec<vk::ImageMemoryBarrier2<'_>>,
@@ -917,7 +917,7 @@ impl DeviceContext {
             let prev = states
                 .buffers
                 .entry(buffer)
-                .or_insert(RgBufferState::initial());
+                .or_insert(DgBufferState::initial());
             let cur_write = dst_access & write_mask != vk::AccessFlags2::NONE;
 
             if prev.was_write || cur_write {
@@ -932,7 +932,7 @@ impl DeviceContext {
 
             states.buffers.insert(
                 buffer,
-                RgBufferState {
+                DgBufferState {
                     stage: dst_stage,
                     access: dst_access,
                     was_write: cur_write,
@@ -946,7 +946,7 @@ impl DeviceContext {
             let prev = states
                 .images
                 .entry(image)
-                .or_insert(RgImageState::initial());
+                .or_insert(DgImageState::initial());
             let cur_write = dst_access & write_mask != vk::AccessFlags2::NONE;
             let layout_change = prev.layout != new_layout;
 
@@ -966,7 +966,7 @@ impl DeviceContext {
 
             states.images.insert(
                 image,
-                RgImageState {
+                DgImageState {
                     stage: dst_stage,
                     access: dst_access,
                     layout: new_layout,
@@ -983,7 +983,7 @@ impl DeviceContext {
         slots: &[AddressSlot],
         bytes: &[u8],
         stage: vk::PipelineStageFlags2,
-    ) -> Vec<RgBufferTransition> {
+    ) -> Vec<DgBufferTransition> {
         slots
             .iter()
             .map(|slot| {
@@ -1720,11 +1720,8 @@ impl DeviceContext {
         };
 
         let handle = self.buffers.insert(DeviceBufferInner {
-            label: String::from(name),
             buffer,
             size,
-            usage,
-            memory_info: memory_info.clone(),
             allocation,
             address,
         });
@@ -1825,8 +1822,8 @@ impl DeviceContext {
         mem_allocator: &mut vk_mem::Allocator,
     ) {
         match trash {
-            Trash::Buffer(id) => unsafe {
-                let mut buffer = buffers.remove(id).unwrap();
+            Trash::Buffer(handle) => unsafe {
+                let mut buffer = buffers.remove(handle).unwrap();
                 mem_allocator.destroy_buffer(buffer.buffer, &mut buffer.allocation);
             },
             Trash::Image((image, image_view, allocation)) => unsafe {
@@ -1993,34 +1990,10 @@ fn default_buffer_usage() -> vk::BufferUsageFlags {
 }
 
 pub struct DeviceBufferInner {
-    #[allow(dead_code)]
-    label: String,
     buffer: vk::Buffer,
     size: usize,
-    #[allow(dead_code)]
-    usage: vk::BufferUsageFlags,
-    #[allow(dead_code)]
-    memory_info: vk_mem::AllocationCreateInfo,
     allocation: vk_mem::Allocation,
     address: vk::DeviceAddress,
-}
-
-impl DeviceBufferInner {
-    fn buffer(&self) -> vk::Buffer {
-        self.buffer
-    }
-
-    fn size(&self) -> usize {
-        self.size
-    }
-
-    fn allocation(&self) -> vk_mem::Allocation {
-        self.allocation
-    }
-
-    fn address(&self) -> vk::DeviceAddress {
-        self.address
-    }
 }
 
 struct DeviceBufferShared {
@@ -2365,79 +2338,79 @@ macro_rules! enqueue_function {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum RgResource {
+enum DgResource {
     Buffer(vk::Buffer),
     Image(vk::Image),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct RgVersion {
-    resource: RgResource,
+struct DgVersion {
+    resource: DgResource,
     version: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-struct RgPassId(usize);
+struct DgPassId(usize);
 
 #[derive(Clone, Copy)]
-enum RgAccessKind {
+enum DgAccessKind {
     Read,
     Write,
     ReadWrite,
 }
 
 #[derive(Clone)]
-pub struct RgBufferTransition {
+pub struct DgBufferTransition {
     buffer: vk::Buffer,
-    kind: RgAccessKind,
+    kind: DgAccessKind,
     stage: vk::PipelineStageFlags2,
     access: vk::AccessFlags2,
 }
 
 #[derive(Clone)]
-pub struct RgImageTransition {
+pub struct DgImageTransition {
     image: vk::Image,
     subresource_range: vk::ImageSubresourceRange,
-    kind: RgAccessKind,
+    kind: DgAccessKind,
     stage: vk::PipelineStageFlags2,
     access: vk::AccessFlags2,
     layout: vk::ImageLayout,
 }
 
 #[derive(Default)]
-struct RgPipelineBarrier {
-    buffers: Vec<RgBufferTransition>,
-    images: Vec<RgImageTransition>,
+struct DgPipelineBarrier {
+    buffers: Vec<DgBufferTransition>,
+    images: Vec<DgImageTransition>,
 }
 
-struct RgPass {
+struct DgPass {
     /// Pass name.
     #[allow(dead_code)]
     name: String,
 
     /// Synchronization intent (barriers).
-    barrier: RgPipelineBarrier,
+    barrier: DgPipelineBarrier,
 
     /// Enqueued closure.
     function: Box<dyn Fn(&mut DeviceContext, vk::CommandBuffer)>,
 }
 
-pub struct RgContext {
+pub struct DeviceGraphBuilder {
     /// Registered passes.
-    passes: Vec<RgPass>,
+    passes: Vec<DgPass>,
 
     /// Versioning.
-    versions: HashMap<RgResource, u32>,
+    versions: HashMap<DgResource, u32>,
 
     /// Version-to-pass O(1) lookup.
-    writers: HashMap<RgVersion, RgPassId>,
-    readers: HashMap<RgVersion, Vec<RgPassId>>,
+    writers: HashMap<DgVersion, DgPassId>,
+    readers: HashMap<DgVersion, Vec<DgPassId>>,
 
     /// Passes with RAW, WAW, or WAR dependencies.
-    edges: HashSet<(RgPassId, RgPassId)>,
+    edges: HashSet<(DgPassId, DgPassId)>,
 }
 
-impl RgContext {
+impl DeviceGraphBuilder {
     pub fn new() -> Self {
         Self {
             passes: Vec::new(),
@@ -2450,13 +2423,13 @@ impl RgContext {
 }
 
 #[derive(Clone, Copy)]
-struct RgBufferState {
+struct DgBufferState {
     stage: vk::PipelineStageFlags2,
     access: vk::AccessFlags2,
     was_write: bool,
 }
 
-impl RgBufferState {
+impl DgBufferState {
     fn initial() -> Self {
         Self {
             stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
@@ -2467,14 +2440,14 @@ impl RgBufferState {
 }
 
 #[derive(Clone, Copy)]
-struct RgImageState {
+struct DgImageState {
     stage: vk::PipelineStageFlags2,
     access: vk::AccessFlags2,
     layout: vk::ImageLayout,
     was_write: bool,
 }
 
-impl RgImageState {
+impl DgImageState {
     fn initial() -> Self {
         Self {
             stage: vk::PipelineStageFlags2::TOP_OF_PIPE,
@@ -2485,55 +2458,55 @@ impl RgImageState {
     }
 }
 
-struct RgStates {
-    buffers: HashMap<vk::Buffer, RgBufferState>,
-    images: HashMap<vk::Image, RgImageState>,
+struct DgStates {
+    buffers: HashMap<vk::Buffer, DgBufferState>,
+    images: HashMap<vk::Image, DgImageState>,
 }
 
 #[allow(dead_code)]
-fn sampled_fragment(image: &DeviceImage) -> RgImageTransition {
-    RgImageTransition {
+pub fn sampled_fragment(image: &DeviceImage) -> DgImageTransition {
+    DgImageTransition {
         image: image.image(),
         subresource_range: *image.subresource_range(),
-        kind: RgAccessKind::Read,
+        kind: DgAccessKind::Read,
         stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
         access: vk::AccessFlags2::SHADER_READ,
         layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
     }
 }
-pub fn color_attachment(image: &DeviceImage) -> RgImageTransition {
-    RgImageTransition {
+pub fn color_attachment(image: &DeviceImage) -> DgImageTransition {
+    DgImageTransition {
         image: image.image(),
         subresource_range: *image.subresource_range(),
-        kind: RgAccessKind::Write,
+        kind: DgAccessKind::Write,
         stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
         access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
         layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
     }
 }
-pub fn depth_attachment(image: &DeviceImage) -> RgImageTransition {
-    RgImageTransition {
+pub fn depth_attachment(image: &DeviceImage) -> DgImageTransition {
+    DgImageTransition {
         image: image.image(),
         subresource_range: *image.subresource_range(),
-        kind: RgAccessKind::Write,
+        kind: DgAccessKind::Write,
         stage: vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
             | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
         access: vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
         layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
     }
 }
-fn buffer_transfer_read(buffer: vk::Buffer) -> RgBufferTransition {
-    RgBufferTransition {
+pub fn buffer_transfer_read(buffer: vk::Buffer) -> DgBufferTransition {
+    DgBufferTransition {
         buffer: buffer,
-        kind: RgAccessKind::Read,
+        kind: DgAccessKind::Read,
         stage: vk::PipelineStageFlags2::TRANSFER,
         access: vk::AccessFlags2::TRANSFER_READ,
     }
 }
-fn buffer_transfer_write(buffer: vk::Buffer) -> RgBufferTransition {
-    RgBufferTransition {
+pub fn buffer_transfer_write(buffer: vk::Buffer) -> DgBufferTransition {
+    DgBufferTransition {
         buffer: buffer,
-        kind: RgAccessKind::Write,
+        kind: DgAccessKind::Write,
         stage: vk::PipelineStageFlags2::TRANSFER,
         access: vk::AccessFlags2::TRANSFER_WRITE,
     }
@@ -2541,29 +2514,32 @@ fn buffer_transfer_write(buffer: vk::Buffer) -> RgBufferTransition {
 pub fn constant_buffer_read(
     buffer: vk::Buffer,
     stage: vk::PipelineStageFlags2,
-) -> RgBufferTransition {
-    RgBufferTransition {
+) -> DgBufferTransition {
+    DgBufferTransition {
         buffer: buffer,
-        kind: RgAccessKind::Read,
+        kind: DgAccessKind::Read,
         stage,
         access: vk::AccessFlags2::SHADER_READ,
     }
 }
-fn storage_buffer_read(buffer: vk::Buffer, stage: vk::PipelineStageFlags2) -> RgBufferTransition {
-    RgBufferTransition {
-        buffer: buffer,
-        kind: RgAccessKind::Read,
-        stage,
-        access: vk::AccessFlags2::SHADER_READ,
-    }
-}
-fn storage_buffer_read_write(
+pub fn storage_buffer_read(
     buffer: vk::Buffer,
     stage: vk::PipelineStageFlags2,
-) -> RgBufferTransition {
-    RgBufferTransition {
+) -> DgBufferTransition {
+    DgBufferTransition {
         buffer: buffer,
-        kind: RgAccessKind::ReadWrite,
+        kind: DgAccessKind::Read,
+        stage,
+        access: vk::AccessFlags2::SHADER_READ,
+    }
+}
+pub fn storage_buffer_read_write(
+    buffer: vk::Buffer,
+    stage: vk::PipelineStageFlags2,
+) -> DgBufferTransition {
+    DgBufferTransition {
+        buffer: buffer,
+        kind: DgAccessKind::ReadWrite,
         stage,
         access: vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE,
     }
@@ -2576,6 +2552,18 @@ pub trait U32Castable {
 impl U32Castable for f32 {
     fn to_u32(self) -> u32 {
         u32::from_le_bytes(self.to_le_bytes())
+    }
+}
+
+impl U32Castable for i32 {
+    fn to_u32(self) -> u32 {
+        u32::from_le_bytes(self.to_le_bytes())
+    }
+}
+
+impl U32Castable for u32 {
+    fn to_u32(self) -> u32 {
+        self
     }
 }
 
@@ -2651,14 +2639,14 @@ where
             &[],
             Box::new(
                 move |ctx: &mut DeviceContext, command_buffer: vk::CommandBuffer| {
-                    let tmp_buf = ctx
+                    let tmp_buf_mem = ctx
                         .buffers
                         .get(tmp_buf.handle())
                         .expect(&format!("missing buffer: {}", tmp_buf.name()));
 
-                    let tmp_ptr = ctx.map_memory(tmp_buf.allocation(), tmp_buf.size());
+                    let tmp_ptr = ctx.map_memory(tmp_buf_mem.allocation, tmp_buf.size());
                     tmp_ptr.copy_from_slice(&src_vec);
-                    ctx.unmap_memory(tmp_buf.allocation());
+                    ctx.unmap_memory(tmp_buf_mem.allocation);
 
                     assert_eq!(tmp_buf.size(), dst_buf.size());
 

@@ -6,10 +6,8 @@ struct AddPush {
     float *a;
     float *b;
 };
-[vk::push_constant]
-AddPush pc;
 
 [numthreads(block_dim_x, 1, 1)]
-void main(uint thread_id: SV_GroupThreadID) {
-    pc.output[thread_id] = pc.a[thread_id] + pc.b[thread_id];
+void main(uint thread_id: SV_GroupThreadID, uniform AddPush push) {
+    push.output[thread_id] = push.a[thread_id] + push.b[thread_id];
 }

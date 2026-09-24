@@ -7,8 +7,15 @@ pub use inventory;
 // Same reason: `#[push_constant]` derives `bytemuck::Pod` through this path.
 pub use bytemuck;
 
+// `shader!` and `function!` live in the proc-macro crate, but are re-exported here so a
+// shader module reaches them through the same `use gpu::*` as everything else they need.
+pub use gpu_reflect::{function, shader};
+
 mod device_context;
 pub use device_context::*;
+
+mod dtype;
+pub use dtype::*;
 
 mod descriptor_pool;
 

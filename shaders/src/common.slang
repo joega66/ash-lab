@@ -1,6 +1,3 @@
-#ifndef COMMON_SLANG
-#define COMMON_SLANG
+#pragma once
 
 static const uint DEFAULT_NUMTHREADS = 64;
-
-#endif

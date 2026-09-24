@@ -5,7 +5,7 @@ pub trait ShaderDefine {
 }
 
 /// Give a shader permutation dimension its preprocessor define name.
-/// Example usage:
+/// Example:
 /// ```
 /// use gpu::shader_define;
 /// shader_define!(EnableShadows, "ENABLE_SHADOWS");
@@ -213,7 +213,7 @@ impl<D: ShaderDefine, E: ShaderPermutationEnum> ShaderPermutationDimension
 
 /// Implements [`ShaderPermutationEnum`] for an enum, using each
 /// variant's identifier as its define value.
-/// Example usage:
+/// Example:
 /// ```
 /// use gpu_reflect::{ShaderPermutation};
 /// use gpu::{shader_permutation_enum};
@@ -241,12 +241,11 @@ macro_rules! shader_permutation_enum {
 }
 
 /// A shader module's full set of permutation dimensions, flattened into a
-/// single linear index used to select a shader variant at
-/// runtime.
+/// single linear index used to select a shader variant at runtime.
 ///
 /// Should be a plain struct whose fields all implement [`ShaderPermutationDimension`]
 ///
-/// Example usage:
+/// Example:
 /// ```
 /// use gpu_reflect::{ShaderPermutation};
 /// use gpu::{shader_define, ShaderPermutationBool, ShaderPermutationInt};

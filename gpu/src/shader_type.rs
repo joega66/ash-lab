@@ -33,6 +33,22 @@ impl ScalarKind {
         }
     }
 
+    /// The wrapper struct in `dtype.slang` that carries this scalar, for the scalars that
+    /// have one.
+    ///
+    /// A generic kernel is instantiated with the wrapper rather than the bare scalar,
+    /// because `slangc -specialize` only accepts a type that declares its interfaces
+    /// directly. The wrapper holds exactly one scalar and nothing else, so it has that
+    /// scalar's layout and the host still binds a plain `f32`/`i32`/`u32` against it.
+    pub fn wrapper_name(self) -> Option<&'static str> {
+        match self {
+            ScalarKind::Float32 => Some("F32"),
+            ScalarKind::Int32 => Some("I32"),
+            ScalarKind::UInt32 => Some("U32"),
+            _ => None,
+        }
+    }
+
     pub fn source_name(self) -> &'static str {
         match self {
             ScalarKind::Bool => "bool",
@@ -210,36 +226,50 @@ impl TypeLayout {
     fn check_uniform_block(&self, reflected: &Type, noun: &str) -> Result<(), Vec<LayoutMismatch>> {
         let path = self.root_path();
 
-        let Type::ConstantBuffer {
-            element_type,
-            element_var_layout,
-            ..
-        } = reflected
-        else {
-            return Err(vec![LayoutMismatch {
-                path,
-                message: format!(
-                    "shader parameter is {}, not a {noun}",
-                    reflected_kind_name(reflected)
-                ),
-            }]);
+        // A module-scope `[vk::push_constant]` global is reflected as a constant buffer
+        // wrapping the block. A generic entry point cannot use one — a global cannot name
+        // the entry point's type parameters — so its push constant is a `uniform`
+        // entry-point parameter, which is reflected as the struct itself. Both lower to
+        // the same SPIR-V push constant, and the fields are checked the same way.
+        let (element_type, reserved_size) = match reflected {
+            Type::ConstantBuffer {
+                element_type,
+                element_var_layout,
+                ..
+            } => {
+                let reserved = element_var_layout.as_ref().and_then(|layout| {
+                    match layout.binding {
+                        Binding::Uniform { size, .. } => Some(size),
+                        _ => None,
+                    }
+                });
+                (&**element_type, reserved)
+            }
+            Type::Struct { .. } => (reflected, None),
+            _ => {
+                return Err(vec![LayoutMismatch {
+                    path,
+                    message: format!(
+                        "shader parameter is {}, not a {noun}",
+                        reflected_kind_name(reflected)
+                    ),
+                }]);
+            }
         };
 
         let mut mismatches = Vec::new();
         check_type(self, element_type, &path, &mut mismatches);
 
-        if let Some(element_var_layout) = element_var_layout {
-            if let Binding::Uniform { size, .. } = element_var_layout.binding {
-                if self.size() > size {
-                    mismatches.push(LayoutMismatch {
-                        path: path.clone(),
-                        message: format!(
-                            "host type is {} bytes, but the shader reserved {size} bytes for the \
-                             {noun}",
-                            self.size()
-                        ),
-                    });
-                }
+        if let Some(size) = reserved_size {
+            if self.size() > size {
+                mismatches.push(LayoutMismatch {
+                    path: path.clone(),
+                    message: format!(
+                        "host type is {} bytes, but the shader reserved {size} bytes for the \
+                         {noun}",
+                        self.size()
+                    ),
+                });
             }
         }
 
@@ -448,6 +478,15 @@ fn check_type(
             }
         }
 
+        // A generic kernel is instantiated with one of the element-type wrappers from
+        // `dtype.slang` rather than with a bare scalar, because `slangc -specialize` only
+        // accepts a type that declares its interfaces directly. Each wrapper holds exactly
+        // one scalar and nothing else, so it has that scalar's layout and is checked
+        // against the host scalar the shader really reads.
+        (TypeLayout::Scalar(_), Type::Struct { fields, .. }) if fields.len() == 1 => {
+            check_type(host, &fields[0].ty, path, mismatches);
+        }
+
         (
             TypeLayout::Vector {
                 element_type,
@@ -523,11 +562,22 @@ fn check_type(
         }
 
         (TypeLayout::DeviceAddress { pointee, .. }, Type::Pointer { value_type }) => {
+            // slangc reports a pointee by name alone, with no fields to look through, so an
+            // element-type wrapper from `dtype.slang` is matched by its name here rather
+            // than unwrapped the way a struct-typed parameter is.
+            let wrapper = match **pointee {
+                TypeLayout::Scalar(scalar) => scalar.wrapper_name(),
+                _ => None,
+            };
             if let Some(host_name) = pointee.source_name() {
-                if host_name != value_type {
+                if host_name != value_type && wrapper != Some(value_type.as_str()) {
+                    let expected = match wrapper {
+                        Some(wrapper) => format!("{host_name} (or its wrapper {wrapper})"),
+                        None => host_name.to_string(),
+                    };
                     mismatches.push(mismatch(
                         path,
-                        format!("host points at {host_name}, shader points at {value_type}"),
+                        format!("host points at {expected}, shader points at {value_type}"),
                     ));
                 }
             }

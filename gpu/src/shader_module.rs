@@ -27,9 +27,14 @@ fn workspace_target_dir(start: &Path) -> PathBuf {
 /// The shader path is relative to the directory of the `.rs` file that declares it, so
 /// a shader sits next to its declaring module rather than at the top of `src`.
 ///
-/// Example usage:
-/// shader!(MyShader, "MyShader.slang")
-/// shader!(MyShader, "MyShader.slang", MyShaderPermutations)
+/// Declared with [`shader!`](crate::shader), or by [`function!`](crate::function) when the
+/// shader is also an entry point:
+///
+/// ```ignore
+/// shader!(MyShader, "MyShader.slang");
+/// shader!(MyShader, "MyShader.slang", MyShaderPermutations);
+/// shader!(MyShader<T> for [f32, u32], "MyShader.slang");
+/// ```
 pub trait DynShaderModuleLike {
     fn manifest_dir(&self) -> &'static str;
 
@@ -80,6 +85,34 @@ pub trait DynShaderModuleLike {
 
     fn defines(&self, index: usize) -> Vec<(&'static str, String)>;
 
+    /// The Slang type arguments this instantiation specializes the entry point with, one
+    /// per type parameter and in declaration order, e.g. `["float"]` or
+    /// `["float", "uint"]`. Empty for a non-generic shader.
+    ///
+    /// The shader declares an ordinary Slang generic and the compiler passes these to
+    /// slangc as `-specialize`, so the kernel reads as generic code rather than as a
+    /// preprocessor sandwich. A generic entry point takes its push constant as a `uniform`
+    /// parameter, since a module-scope global cannot name the entry point's type
+    /// parameters; Slang still lowers that to a real SPIR-V push constant.
+    ///
+    /// Instantiations are an axis of their own rather than a [`ShaderPermutationMatrix`]
+    /// dimension: a permutation is chosen at the call site by a value, an instantiation by
+    /// a type. Each instantiation is its own shader module type, so the artifacts it builds
+    /// are the full cross product of the two axes.
+    fn specialization_args(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    /// A file-name-safe tag separating this instantiation's build artifacts from its
+    /// siblings', derived from the element types it was instantiated with: `float`, or
+    /// `float_uint` for a function over a pair. Empty for a non-generic shader.
+    ///
+    /// Taken from [`Self::specialization_args`] rather than stored beside it, so the two
+    /// cannot disagree about what this instantiation is, whatever its arity.
+    fn instantiation_tag(&self) -> String {
+        self.specialization_args().join("_").to_lowercase()
+    }
+
     #[allow(unused_variables)]
     fn should_compile(&self, index: usize) -> bool {
         true
@@ -91,7 +124,8 @@ pub trait DynShaderModuleLike {
     }
 
     /// Mirrors the source layout under [`Self::build_dir`], so that shaders sharing a
-    /// file name in different modules compile to distinct artifacts.
+    /// file name in different modules compile to distinct artifacts, and so that the
+    /// instantiations of one generic shader do not overwrite each other.
     fn spirv_file_name(&self, index: usize) -> PathBuf {
         let relative_path = self.source_dir().join(self.relative_path());
         let mut new_file_name = relative_path
@@ -99,6 +133,11 @@ pub trait DynShaderModuleLike {
             .expect("missing file stem")
             .to_string_lossy()
             .into_owned();
+        let tag = self.instantiation_tag();
+        if !tag.is_empty() {
+            new_file_name.push('_');
+            new_file_name.push_str(&tag);
+        }
         new_file_name.push_str(&format!("_{}", index));
         let new_file_name = Path::new(&new_file_name);
         let new_file_name = new_file_name.with_extension("spirv");
@@ -117,49 +156,11 @@ pub trait ShaderModuleLike: DynShaderModuleLike {
         Self::Permutations::total_permutations()
     }
 
+    /// The permutation's defines. Instantiations do not contribute: they specialize the
+    /// entry point's generic parameters instead, through [`Self::specialization_args`].
     fn defines(&self, index: usize) -> Vec<(&'static str, String)> {
-        let perm = Self::Permutations::from_flat_index(index);
-        perm.defines()
+        Self::Permutations::from_flat_index(index).defines()
     }
-}
-
-#[macro_export]
-macro_rules! shader {
-    ($ty:ident, $path:expr) => {
-        $crate::shader!($ty, $path, ());
-    };
-    ($ty:ident, $path:expr, $permutations:ty) => {
-        pub struct $ty {}
-
-        impl $crate::ShaderModuleLike for $ty {
-            type Permutations = $permutations;
-        }
-
-        impl $crate::DynShaderModuleLike for $ty {
-            fn manifest_dir(&self) -> &'static str {
-                env!("CARGO_MANIFEST_DIR")
-            }
-            fn relative_path(&self) -> &'static str {
-                $path
-            }
-            fn source_file(&self) -> &'static str {
-                file!()
-            }
-            fn total_permutations(&self) -> usize {
-                $crate::ShaderModuleLike::total_permutations(self)
-            }
-            fn defines(&self, index: usize) -> Vec<(&'static str, String)> {
-                $crate::ShaderModuleLike::defines(self, index)
-            }
-        }
-
-        $crate::inventory::submit! {
-            $crate::ShaderModuleRegistry {
-                type_id: std::any::TypeId::of::<$ty>(),
-                instantiate: || -> Box<dyn $crate::DynShaderModuleLike> { Box::new($ty {}) },
-            }
-        }
-    };
 }
 
 pub struct ShaderModuleRegistry {
@@ -214,93 +215,6 @@ pub trait DeviceFunctionLike: DynDeviceFunctionLike {
     fn spec_constant_layout(&self) -> TypeLayout {
         Self::SpecConstant::type_layout()
     }
-}
-
-#[macro_export]
-macro_rules! function {
-    ($shader_ty:ident, params: $params_ty:ty, push: $push:ty, $entry_point:expr, $path:expr $(,)?) => {
-        $crate::function!(
-            $shader_ty,
-            params: $params_ty,
-            push: $push,
-            spec: (),
-            $entry_point,
-            $path,
-        );
-    };
-    ($shader_ty:ident, params: $params_ty:ty, spec: $spec:ty, $entry_point:expr, $path:expr $(,)?) => {
-        $crate::function!(
-            $shader_ty,
-            params: $params_ty,
-            push: (),
-            spec: $spec,
-            $entry_point,
-            $path,
-        );
-    };
-    ($shader_ty:ident, push: $push:ty, spec: $spec:ty, $entry_point:expr, $path:expr $(,)?) => {
-        $crate::function!(
-            $shader_ty,
-            params: (),
-            push: $push,
-            spec: $spec,
-            $entry_point,
-            $path,
-        );
-    };
-    ($shader_ty:ident, push: $push:ty, $entry_point:expr, $path:expr $(,)?) => {
-        $crate::function!(
-            $shader_ty,
-            params: (),
-            push: $push,
-            spec: (),
-            $entry_point,
-            $path,
-        );
-    };
-
-    ($shader_ty:ident, params: $params_ty:ty, push: $push:ty, spec: $spec:ty, $entry_point:expr, $path:expr $(,)?) => {
-        shader!($shader_ty, $path);
-        impl $crate::DeviceFunctionLike for $shader_ty {
-            type Shader = $shader_ty;
-            type Params = $params_ty;
-            type PushConstant = $push;
-            type SpecConstant = $spec;
-        }
-        impl $crate::DynDeviceFunctionLike for $shader_ty {
-            fn new() -> Self {
-                Self {}
-            }
-
-            fn shader_type(&self) -> std::any::TypeId {
-                $crate::DeviceFunctionLike::shader_type(self)
-            }
-
-            fn parameter_types(&self) -> Vec<$crate::ShaderParameterType> {
-                $crate::DeviceFunctionLike::parameter_types(self)
-            }
-
-            fn push_constant_layout(&self) -> $crate::TypeLayout {
-                $crate::DeviceFunctionLike::push_constant_layout(self)
-            }
-
-            fn spec_constant_layout(&self) -> $crate::TypeLayout {
-                $crate::DeviceFunctionLike::spec_constant_layout(self)
-            }
-
-            fn entry_point(&self) -> &'static str {
-                $entry_point
-            }
-        }
-        $crate::inventory::submit! {
-            {
-                $crate::DeviceFunctionRegistry {
-                    function_type: std::any::TypeId::of::<$shader_ty>(),
-                    instantiate: || -> Box<dyn $crate::DynDeviceFunctionLike> { Box::new($shader_ty {}) },
-                }
-            }
-        }
-    };
 }
 
 #[derive(Clone)]

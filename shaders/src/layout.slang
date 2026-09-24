@@ -1,5 +1,4 @@
-#ifndef LAYOUT_SLANG
-#define LAYOUT_SLANG
+#pragma once
 
 /// What a compile-time query reports when the value is not known until run time.
 static const int64_t UNKNOWN_VALUE = -1;
@@ -739,5 +738,3 @@ RowMajorLayout<S> row_major<S : IRowMajor>(S shape) {
 ColMajorLayout<S> col_major<S : IColMajor>(S shape) {
     return ColMajorLayout<S>(shape, shape.col_major_stride());
 }
-
-#endif // LAYOUT_SLANG
