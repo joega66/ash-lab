@@ -12,27 +12,41 @@ pub use bytemuck;
 pub use gpu_reflect::{function, shader};
 
 mod device_context;
-pub use device_context::*;
+pub use device_context::{
+    DeviceBuffer, DeviceContext, DeviceContextCreateInfo, DeviceFunction, DeviceImage,
+    DeviceImageCreateInfo, HostMappedMemory, Swapchain, SwapchainImage, U32Castable,
+    buffer_transfer_read, buffer_transfer_write, color_attachment, constant_buffer_read,
+    sampled_fragment, storage_buffer_read, storage_buffer_read_write,
+};
 
 mod dtype;
-pub use dtype::*;
+pub use dtype::{DType, DTypeOf};
 
 mod descriptor_pool;
 
 mod shader_permutation;
-pub use shader_permutation::*;
+pub use shader_permutation::{
+    ShaderPermutationBool, ShaderPermutationDimension, ShaderPermutationEnumValue,
+    ShaderPermutationInt,
+};
 
 mod shader_module;
-pub use shader_module::*;
+pub use shader_module::{
+    DeviceFunctionLike, DeviceFunctionRegistry, DynDeviceFunctionLike, DynShaderModuleLike,
+    ShaderModuleLike, ShaderModuleRegistry,
+};
 
 mod shader_parameter;
-pub use shader_parameter::*;
+pub use shader_parameter::{
+    ConstantBuffer, DescriptorKind, DeviceAddress, DynShaderParameters, RWDeviceAddress,
+    RWStructuredBuffer, ShaderParameterType, StructuredBuffer,
+};
 
 mod shader_reflection;
-pub use shader_reflection::*;
+pub use shader_reflection::{Access, BaseShape, Binding, EntryPoint, ShaderReflection, Type};
 
 mod shader_type;
-pub use shader_type::*;
+pub use shader_type::{FieldLayout, ScalarKind, ShaderType, TypeLayout, format_mismatches};
 
 mod utils;
 

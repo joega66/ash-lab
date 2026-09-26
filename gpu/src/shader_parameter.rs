@@ -1,4 +1,9 @@
-use crate::{DeviceBuffer, DeviceBufferInner, ShaderType, TypeLayout, utils::Handle};
+use crate::device_context::DeviceBufferInner;
+use crate::{
+    DeviceBuffer,
+    shader_type::{ShaderType, TypeLayout},
+    utils::Handle,
+};
 use ash::vk;
 use std::marker::PhantomData;
 
@@ -195,7 +200,7 @@ pub struct ShaderParameterType {
 pub struct ShaderParameter {
     pub name: &'static str,
     pub kind: DescriptorKind,
-    pub handle: Handle<DeviceBufferInner>,
+    pub(crate) handle: Handle<DeviceBufferInner>,
 }
 
 pub trait DynShaderParameters: Sized {

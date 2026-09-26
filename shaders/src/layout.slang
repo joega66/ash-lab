@@ -102,8 +102,8 @@ interface IShape {
     Dynamic to_dynamic();
 
     /// The compile-time extent of dimension `i`, or `UNKNOWN_VALUE` if it is a runtime value.
-    /// 
-    /// Prefer `static_dim_at<I>` wherever the index is known, which reports a 
+    ///
+    /// Prefer `static_dim_at<I>` wherever the index is known, which reports a
     /// dynamic dimension as a compile error instead of a value to test.
     static int64_t static_at(int i);
 
@@ -669,7 +669,7 @@ struct Layout<S : IShape, D : IShape> : ITensorLayout {
     }
 
     /// Converts multi-dimensional coordinates to a linear index.
-    /// 
+    ///
     /// This function is the inverse of `idx2crd` , transforming a set of coordinates into a flat index
     /// based on the provided shape and stride information. This is essential for mapping multi-
     /// dimensional tensor elements to linear memory.

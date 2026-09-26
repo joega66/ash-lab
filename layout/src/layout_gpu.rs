@@ -1,5 +1,4 @@
 use core::mem::{offset_of, size_of};
-
 use gpu::{FieldLayout, ScalarKind, ShaderType, TypeLayout, bytemuck};
 
 use crate::dim::{Const, Dim, Prod};

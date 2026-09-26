@@ -1,4 +1,4 @@
-use crate::{ScalarKind, ShaderType, bytemuck};
+use crate::{bytemuck, shader_type::ScalarKind, shader_type::ShaderType};
 
 /// A scalar element type that a generic device function may be instantiated over.
 ///
@@ -65,9 +65,9 @@ macro_rules! for_each_dtype {
     ($callback:ident ! ( $($args:tt)* )) => {
         $crate::$callback!(
             $($args)* ;
-            [f32 => $crate::ScalarKind::Float32]
-            [i32 => $crate::ScalarKind::Int32]
-            [u32 => $crate::ScalarKind::UInt32]
+            [f32 => $crate::shader_type::ScalarKind::Float32]
+            [i32 => $crate::shader_type::ScalarKind::Int32]
+            [u32 => $crate::shader_type::ScalarKind::UInt32]
         );
     };
 }
@@ -122,7 +122,7 @@ macro_rules! __impl_dtype {
     (; $([$ty:ty => $kind:expr])+) => {
         $(
             impl $crate::DType for $ty {
-                const KIND: $crate::ScalarKind = $kind;
+                const KIND: $crate::shader_type::ScalarKind = $kind;
             }
         )+
     };

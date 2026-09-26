@@ -1,4 +1,4 @@
-use crate::{Binding, SpecializationConstant, Type};
+use crate::shader_reflection::{Binding, SpecializationConstant, Type};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScalarKind {
@@ -237,12 +237,13 @@ impl TypeLayout {
                 element_var_layout,
                 ..
             } => {
-                let reserved = element_var_layout.as_ref().and_then(|layout| {
-                    match layout.binding {
-                        Binding::Uniform { size, .. } => Some(size),
-                        _ => None,
-                    }
-                });
+                let reserved =
+                    element_var_layout
+                        .as_ref()
+                        .and_then(|layout| match layout.binding {
+                            Binding::Uniform { size, .. } => Some(size),
+                            _ => None,
+                        });
                 (&**element_type, reserved)
             }
             Type::Struct { .. } => (reflected, None),
@@ -598,7 +599,7 @@ fn check_type(
 
 fn check_fields(
     fields: &[FieldLayout],
-    reflected_fields: &[crate::Parameter],
+    reflected_fields: &[crate::shader_reflection::Parameter],
     path: &str,
     mismatches: &mut Vec<LayoutMismatch>,
 ) {

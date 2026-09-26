@@ -1,12 +1,10 @@
 use crate::{
-    AddressSlot, TypeLayout, UInt3,
-    descriptor_pool::*,
-    shader_module::*,
-    shader_parameter::*,
-    shader_permutation::*,
-    shader_type::ShaderType,
-    utils::Handle,
-    utils::{Arena, DeviceOwner, InstanceOwner},
+    DescriptorKind, DeviceFunctionLike, DeviceFunctionRegistry, DynShaderParameters,
+    ShaderModuleLike, ShaderParameterType, UInt3,
+    descriptor_pool::{DescriptorSetAllocator, DescriptorSetCacheLookup},
+    shader_permutation::ShaderPermutationMatrix,
+    shader_type::{AddressSlot, ShaderType, TypeLayout},
+    utils::{Arena, DeviceOwner, Handle, InstanceOwner},
 };
 use ash::{
     Device, Entry, Instance, khr,
@@ -2020,7 +2018,7 @@ impl<T> DeviceBuffer<T> {
         &self.shared.label
     }
 
-    pub fn handle(&self) -> Handle<DeviceBufferInner> {
+    pub(crate) fn handle(&self) -> Handle<DeviceBufferInner> {
         self.shared.handle
     }
 
@@ -2113,12 +2111,12 @@ impl Drop for DeviceImageShared {
 }
 
 #[derive(Clone)]
+pub struct DeviceImageCreateInfo {}
+
+#[derive(Clone)]
 pub struct DeviceImage {
     shared: Rc<DeviceImageShared>,
 }
-
-#[derive(Clone)]
-pub struct DeviceImageCreateInfo {}
 
 impl DeviceImage {
     pub fn image(&self) -> vk::Image {
@@ -2484,6 +2482,7 @@ pub fn color_attachment(image: &DeviceImage) -> DgImageTransition {
         layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
     }
 }
+#[allow(dead_code)]
 pub fn depth_attachment(image: &DeviceImage) -> DgImageTransition {
     DgImageTransition {
         image: image.image(),

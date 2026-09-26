@@ -4,7 +4,7 @@
 /// and hasn't been used in awhile (```MAX_AGE_MS```), the descriptor set is freed.
 /// If a descriptor pool has ```MAX_SETS```, it is immediately freed, since the implication is that
 /// the application hasn't touched the pool in awhile...
-use super::*;
+use crate::DeviceContext;
 use ash::{VkResult, vk};
 use std::collections::HashMap;
 

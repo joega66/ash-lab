@@ -10,13 +10,14 @@ pub use dim::{Const, ConstDim, Dim, Prod, all_static, static_cosize, static_prod
 pub use layout::Layout;
 pub use layout_gpu::{DimType, ShapeType};
 pub use major::{ColMajor, ColMajorLayout, RowMajor, RowMajorLayout, col_major, row_major};
-pub use shape::{DimAt, Shape};
-pub use tile_tensor::*;
+pub use shape::DimAt;
+pub use shape::Shape;
+pub use tile_tensor::TileTensor;
 pub use tile_tensor_gpu::{DeviceTensor, RWDeviceTensor};
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::{Const, Dim, Layout, Prod, Shape, col_major, row_major, tile_tensor::TileTensor};
 
     #[test]
     fn static_layouts_are_zero_sized_and_fold() {

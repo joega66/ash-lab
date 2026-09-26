@@ -1,4 +1,8 @@
-use gpu::*;
+use gpu::{
+    Access, BaseShape, Binding, DescriptorKind, DeviceFunctionRegistry, DynDeviceFunctionLike,
+    EntryPoint, ShaderModuleRegistry, ShaderParameterType, ShaderReflection, Type,
+    format_mismatches,
+};
 use std::assert_eq;
 use std::fs;
 use std::path::Path;
@@ -248,8 +252,12 @@ fn main() {
                 .find(|x| x.name == function.entry_point())
                 .expect(&format!("missing entry point {}", function.entry_point()));
 
-            let expected_push_constant =
-                reflected_push_constant(&reflection, entry_point, function.as_ref(), &spirv_file_name);
+            let expected_push_constant = reflected_push_constant(
+                &reflection,
+                entry_point,
+                function.as_ref(),
+                &spirv_file_name,
+            );
 
             for binding in &entry_point.bindings {
                 // Handled above, against the entry point as a whole.

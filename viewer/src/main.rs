@@ -1,19 +1,23 @@
 #![allow(unsafe_op_in_unsafe_fn)]
-use ash::vk;
-use ash::vk::TaggedStructure;
-use gpu::*;
+use ash::vk::{self, TaggedStructure};
+use gpu::{
+    DeviceBuffer, DeviceContext, DeviceContextCreateInfo, Swapchain, SwapchainImage,
+    color_attachment, constant_buffer_read,
+};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use shaders::*;
+use shaders::TriangleShader;
 use std::collections::HashSet;
 use winit::{
     application::ApplicationHandler,
-    event::*,
+    event::{
+        DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent,
+    },
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowId},
 };
 mod camera;
-use camera::*;
+use camera::{Camera, CameraUniform};
 
 const WINDOW_TITLE: &str = "Hello, Triangle (ash + Vulkan)";
 const MAX_FRAMES_IN_FLIGHT: usize = 2;

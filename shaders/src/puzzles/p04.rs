@@ -1,5 +1,5 @@
-use gpu::*;
-use gpu_reflect::*;
+use gpu::{DType, function};
+use gpu_reflect::push;
 use layout::{Const, DeviceTensor, RWDeviceTensor, RowMajorLayout};
 
 const SIZE: usize = 2;
@@ -22,7 +22,9 @@ function!(
 #[cfg(test)]
 mod test {
     use super::*;
-    use gpu::{DeviceContext, DeviceContextCreateInfo, U32Castable};
+    use gpu::{
+        DTypeOf, DeviceContext, DeviceContextCreateInfo, U32Castable, UInt3, enqueue_function,
+    };
     use layout::TileTensor;
     use std::assert_eq;
     use std::fmt::Debug;

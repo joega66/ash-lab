@@ -1,5 +1,6 @@
 use crate::{
-    DynShaderParameters, ShaderParameterType, ShaderPermutationMatrix, ShaderType, TypeLayout,
+    DynShaderParameters, ShaderParameterType, shader_permutation::ShaderPermutationMatrix,
+    shader_type::ShaderType, shader_type::TypeLayout,
 };
 use ash::Device;
 use std::any::TypeId;

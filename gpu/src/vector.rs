@@ -1,4 +1,4 @@
-use crate::{ScalarKind, ShaderType, TypeLayout};
+use crate::shader_type::{ScalarKind, ShaderType, TypeLayout};
 use bytemuck::{Pod, Zeroable};
 
 macro_rules! vector {

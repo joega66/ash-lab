@@ -1,5 +1,5 @@
-use gpu::*;
-use gpu_reflect::*;
+use gpu::{DeviceAddress, RWDeviceAddress, function};
+use gpu_reflect::{push, spec};
 
 #[push]
 pub struct Add10Push {
@@ -21,7 +21,7 @@ function!(
 #[cfg(test)]
 mod test {
     use super::*;
-    use gpu::{DeviceContext, DeviceContextCreateInfo};
+    use gpu::{DeviceContext, DeviceContextCreateInfo, UInt3, enqueue_function};
 
     /// https://puzzles.modular.com/puzzle_01/puzzle_01.html
     #[test]
