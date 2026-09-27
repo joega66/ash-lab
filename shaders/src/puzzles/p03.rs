@@ -15,8 +15,8 @@ function!(
     Add10Guard,
     push: Add10GuardPush,
     spec: Add10GuardSpec,
-    "main",
-    "p03.slang",
+    name: "main",
+    path: "p03.slang",
 );
 
 #[cfg(test)]

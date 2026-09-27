@@ -106,6 +106,54 @@ impl Instantiation {
     }
 }
 
+/// Parses the `key: value` arguments that follow a declaration's head, in any order.
+///
+/// `arg` parses the value for `key` into its slot and reports whether that slot was
+/// already filled, or returns `None` for a key it does not know; `expected` lists the
+/// known keys for the error message.
+fn parse_named_args(
+    input: ParseStream,
+    expected: &str,
+    mut arg: impl FnMut(&str, ParseStream) -> syn::Result<Option<bool>>,
+) -> syn::Result<()> {
+    while input.parse::<Option<Token![,]>>()?.is_some() && !input.is_empty() {
+        let key: Ident = input.parse()?;
+        input.parse::<Token![:]>()?;
+        match arg(&key.to_string(), input)? {
+            Some(false) => {}
+            Some(true) => {
+                return Err(syn::Error::new_spanned(
+                    &key,
+                    format!("`{key}` is given more than once"),
+                ));
+            }
+            None => {
+                return Err(syn::Error::new_spanned(
+                    &key,
+                    format!("unknown argument `{key}`, expected {expected}"),
+                ));
+            }
+        }
+    }
+
+    if !input.is_empty() {
+        return Err(input.error("expected `,`"));
+    }
+    Ok(())
+}
+
+/// Fills `slot` from `input`, reporting whether it was already filled.
+fn set<T: Parse>(slot: &mut Option<T>, input: ParseStream) -> syn::Result<Option<bool>> {
+    Ok(Some(slot.replace(input.parse()?).is_some()))
+}
+
+fn missing(head: &Head, arg: &str, example: &str) -> syn::Error {
+    syn::Error::new_spanned(
+        &head.name,
+        format!("missing `{arg}` argument, as in `{arg}: {example}`"),
+    )
+}
+
 /// The parts of a declaration that describe the shader itself.
 pub struct ShaderDecl {
     head: Head,
@@ -116,19 +164,23 @@ pub struct ShaderDecl {
 impl Parse for ShaderDecl {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let head: Head = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let path: Expr = input.parse()?;
 
-        let mut permutations: Type = parse_quote!(());
-        if input.parse::<Option<Token![,]>>()?.is_some() && !input.is_empty() {
-            permutations = input.parse()?;
-            input.parse::<Option<Token![,]>>()?;
-        }
+        let mut path: Option<Expr> = None;
+        let mut permutations: Option<Type> = None;
+
+        // `path` is required; `permutations` defaults to `()`.
+        parse_named_args(input, "`path` or `permutations`", |key, input| match key {
+            "path" => set(&mut path, input),
+            "permutations" => set(&mut permutations, input),
+            _ => Ok(None),
+        })?;
+
+        let path = path.ok_or_else(|| missing(&head, "path", "\"shader.slang\""))?;
 
         Ok(ShaderDecl {
             head,
             path,
-            permutations,
+            permutations: permutations.unwrap_or_else(|| parse_quote!(())),
         })
     }
 }
@@ -146,43 +198,36 @@ pub struct FunctionDecl {
 impl Parse for FunctionDecl {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let head: Head = input.parse()?;
-        input.parse::<Token![,]>()?;
 
-        let mut params_ty: Type = parse_quote!(());
-        let mut spec_ty: Type = parse_quote!(());
-        let mut push_ty: Type = parse_quote!(());
+        let mut params_ty: Option<Type> = None;
+        let mut push_ty: Option<Type> = None;
+        let mut spec_ty: Option<Type> = None;
+        let mut entry_point: Option<Expr> = None;
+        let mut path: Option<Expr> = None;
 
-        // `params:`, `push:` and `spec:` are each optional and default to `()`. Nothing
-        // that may follow them is an identifier followed by a colon, so a lookahead is
-        // enough to tell a named argument from the entry point.
-        while input.peek(Ident) && input.peek2(Token![:]) {
-            let key: Ident = input.parse()?;
-            input.parse::<Token![:]>()?;
-            let value: Type = input.parse()?;
-            match key.to_string().as_str() {
-                "params" => params_ty = value,
-                "push" => push_ty = value,
-                "spec" => spec_ty = value,
-                other => {
-                    return Err(syn::Error::new_spanned(
-                        &key,
-                        format!("unknown argument `{other}`, expected `params`, `push` or `spec`"),
-                    ));
-                }
-            }
-            input.parse::<Token![,]>()?;
-        }
+        // `name` and `path` are required; `params`, `push` and `spec` default to `()`.
+        parse_named_args(
+            input,
+            "`name`, `path`, `params`, `push` or `spec`",
+            |key, input| match key {
+                "params" => set(&mut params_ty, input),
+                "push" => set(&mut push_ty, input),
+                "spec" => set(&mut spec_ty, input),
+                "name" => set(&mut entry_point, input),
+                "path" => set(&mut path, input),
+                _ => Ok(None),
+            },
+        )?;
 
-        let entry_point: Expr = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let path: Expr = input.parse()?;
-        input.parse::<Option<Token![,]>>()?;
+        let entry_point = entry_point.ok_or_else(|| missing(&head, "name", "\"main\""))?;
+        let path = path.ok_or_else(|| missing(&head, "path", "\"shader.slang\""))?;
 
+        let unit = || parse_quote!(());
         Ok(FunctionDecl {
             head,
-            params_ty,
-            push_ty,
-            spec_ty,
+            params_ty: params_ty.unwrap_or_else(unit),
+            push_ty: push_ty.unwrap_or_else(unit),
+            spec_ty: spec_ty.unwrap_or_else(unit),
             entry_point,
             path,
         })

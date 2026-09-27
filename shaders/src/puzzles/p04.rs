@@ -15,8 +15,8 @@ pub struct Add102dPush<T: DType> {
 function!(
     Add102d<T> for [f32, u32],
     push: Add102dPush<T>,
-    "main",
-    "p04.slang",
+    name: "main",
+    path: "p04.slang",
 );
 
 #[cfg(test)]

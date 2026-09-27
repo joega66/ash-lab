@@ -1,3 +1,3 @@
 use gpu::shader;
 
-shader!(TriangleShader, "triangle.slang");
+shader!(TriangleShader, path: "triangle.slang");

@@ -20,8 +20,8 @@ pub struct BroadcastAddPush {
 function!(
     BroadcastAdd,
     push: BroadcastAddPush,
-    "main",
-    "p05.slang"
+    name: "main",
+    path: "p05.slang",
 );
 
 #[cfg(test)]

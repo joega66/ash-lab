@@ -32,9 +32,9 @@ fn workspace_target_dir(start: &Path) -> PathBuf {
 /// shader is also an entry point:
 ///
 /// ```ignore
-/// shader!(MyShader, "MyShader.slang");
-/// shader!(MyShader, "MyShader.slang", MyShaderPermutations);
-/// shader!(MyShader<T> for [f32, u32], "MyShader.slang");
+/// shader!(MyShader, path: "MyShader.slang");
+/// shader!(MyShader, path: "MyShader.slang", permutations: MyShaderPermutations);
+/// shader!(MyShader<T> for [f32, u32], path: "MyShader.slang");
 /// ```
 pub trait DynShaderModuleLike {
     fn manifest_dir(&self) -> &'static str;

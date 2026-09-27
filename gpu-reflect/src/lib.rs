@@ -8,9 +8,9 @@ mod device_function;
 /// Compiled once per permutation and, if it is generic, once per registered instantiation.
 /// Example:
 /// ```ignore
-/// shader!(MyShader, "shader.slang");
-/// shader!(MyShader, "shader.slang", MyShaderPermutations);
-/// shader!(Gemm<In, Acc> for [(f32, f32), (u32, f32)], "gemm.slang");
+/// shader!(MyShader, path: "shader.slang");
+/// shader!(MyShader, path: "shader.slang", permutations: MyShaderPermutations);
+/// shader!(Gemm<In, Acc> for [(f32, f32), (u32, f32)], path: "gemm.slang");
 /// ```
 #[proc_macro]
 pub fn shader(input: TokenStream) -> TokenStream {
@@ -20,8 +20,12 @@ pub fn shader(input: TokenStream) -> TokenStream {
 
 /// Declares a device function, optionally generic over one or more [`DType`]s.
 ///
+/// After the head, every argument is named and may appear in any order: `name` (the entry
+/// point) and `path` (the Slang source) are required, while `params`, `push` and `spec`
+/// default to `()`.
+///
 /// ```ignore
-/// function!(Add10, push: Add10Push, spec: Add10Spec, "main", "p01.slang");
+/// function!(Add10, push: Add10Push, spec: Add10Spec, name: "main", path: "p01.slang");
 /// ```
 ///
 /// A generic function is written `Name<T>`, with `T` usable in the push constant, parameter
@@ -33,7 +37,7 @@ pub fn shader(input: TokenStream) -> TokenStream {
 /// #[push]
 /// pub struct Add102dPush<T: DType> { /* .. */ }
 ///
-/// function!(Add102d<T>, push: Add102dPush<T>, "main", "p04.slang");
+/// function!(Add102d<T>, push: Add102dPush<T>, name: "main", path: "p04.slang");
 /// ```
 ///
 /// The shader declares an ordinary Slang generic, which the compiler specializes with
@@ -60,7 +64,7 @@ pub fn shader(input: TokenStream) -> TokenStream {
 /// at dispatch:
 ///
 /// ```ignore
-/// function!(Add102d<T> for [f32, u32], push: Add102dPush<T>, "main", "p04.slang");
+/// function!(Add102d<T> for [f32, u32], push: Add102dPush<T>, name: "main", path: "p04.slang");
 /// ```
 ///
 /// A function over several element types lists the *combinations* it supports rather than a
@@ -73,8 +77,8 @@ pub fn shader(input: TokenStream) -> TokenStream {
 /// function!(
 ///     Gemm<In, Acc> for [(f32, f32), (u32, f32)],
 ///     push: GemmPush<In, Acc>,
-///     "main",
-///     "gemm.slang",
+///     name: "main",
+///     path: "gemm.slang",
 /// );
 /// ```
 #[proc_macro]

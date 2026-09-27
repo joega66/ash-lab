@@ -14,8 +14,8 @@ function!(
     Add10,
     push: Add10Push,
     spec: Add10Spec,
-    "main",
-    "p01.slang",
+    name: "main",
+    path: "p01.slang",
 );
 
 #[cfg(test)]
