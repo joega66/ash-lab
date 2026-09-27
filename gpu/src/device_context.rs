@@ -200,8 +200,7 @@ impl DeviceContext {
         )
     }
 
-    /// Enqueues the creation of a HostBuffer.
-    /// This function allocates memory on the host that is accessible by the device.
+    /// Creates a host buffer synchronously using the DeviceBuffer constructor.
     pub fn create_host_buffer<T>(&mut self, name: &str, len: usize) -> DeviceBuffer<T> {
         let memory_info = vk_mem::AllocationCreateInfo {
             flags: AllocationCreateFlags::HOST_ACCESS_RANDOM,
@@ -312,6 +311,12 @@ impl DeviceContext {
     /// Enqueues a buffer creation using the DeviceBuffer constructor.
     pub fn enqueue_create_buffer<T>(&mut self, name: &str, len: usize) -> DeviceBuffer<T> {
         self.create_buffer::<T>(name, len)
+    }
+
+    /// Enqueues the creation of a HostBuffer.
+    /// This function allocates memory on the host that is accessible by the device.
+    pub fn enqueue_create_host_buffer<T>(&mut self, name: &str, len: usize) -> DeviceBuffer<T> {
+        self.create_host_buffer(name, len)
     }
 
     /// Enqueues an operation to fill this buffer with a specified value.

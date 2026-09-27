@@ -180,7 +180,8 @@ mod tests {
 
     #[test]
     fn tensor_dim_reports_shape_extents() {
-        let t = TileTensor::new(vec![0.0f32; 28], row_major((Const::<4>, 7usize)));
+        let storage = vec![0.0f32; 28];
+        let t = TileTensor::new(&storage, row_major((Const::<4>, 7usize)));
 
         // Runtime index: always a plain number.
         assert_eq!(t.dim(0), 4);
@@ -197,7 +198,8 @@ mod tests {
     #[test]
     fn tensor_indexes_by_coordinate() {
         let layout = row_major((Const::<3>, Const::<4>));
-        let mut t = TileTensor::new(vec![0.0f32; 12], layout);
+        let mut storage = vec![0.0f32; 12];
+        let mut t = TileTensor::new(&mut storage, layout);
 
         t[[1, 2]] = 7.0;
         t[[2, 3]] = 9.0;
@@ -212,8 +214,9 @@ mod tests {
     #[test]
     fn tensor_indexing_follows_a_non_contiguous_layout() {
         // A 2 x 3 window into a 2 x 8 row-major buffer.
+        let storage = (0..16).map(|i| i as f32).collect::<Vec<_>>();
         let t = TileTensor::new(
-            (0..16).map(|i| i as f32).collect::<Vec<_>>(),
+            &storage,
             Layout::new((Const::<2>, Const::<3>), (Const::<8>, Const::<1>)),
         );
 
@@ -226,7 +229,8 @@ mod tests {
     #[test]
     #[should_panic]
     fn tensor_dim_rejects_an_out_of_range_index() {
-        let t = TileTensor::new(vec![0.0f32; 12], row_major((Const::<3>, Const::<4>)));
+        let storage = vec![0.0f32; 12];
+        let t = TileTensor::new(&storage, row_major((Const::<3>, Const::<4>)));
         let _ = t.dim(2);
     }
 

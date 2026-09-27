@@ -64,9 +64,9 @@ mod test {
 
         let mut ctx = DeviceContext::new(&DeviceContextCreateInfo::default());
 
-        let out_buf = ctx.enqueue_create_buffer::<T>("out_buf", SIZE * SIZE);
+        let mut out_buf = ctx.enqueue_create_buffer::<T>("out_buf", SIZE * SIZE);
         ctx.enqueue_fill(&out_buf, T::zero());
-        let out_tensor = TileTensor::new(out_buf.clone(), layout);
+        let out_tensor = TileTensor::new(&mut out_buf, layout);
         println!("out shape:{}x{}", out_tensor.dim(0), out_tensor.dim(1));
 
         let mut expected = Vec::with_capacity(SIZE * SIZE);
@@ -79,7 +79,7 @@ mod test {
         let a = ctx.enqueue_create_buffer("a", SIZE * SIZE);
         ctx.enqueue_copy(&a_host, &a);
 
-        let a_tensor = TileTensor::new(a, layout);
+        let a_tensor = TileTensor::new(&a, layout);
 
         enqueue_function!(
             ctx,

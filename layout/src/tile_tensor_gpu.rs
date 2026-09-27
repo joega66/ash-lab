@@ -4,10 +4,10 @@ use gpu::{
     DeviceAddress, DeviceBuffer, FieldLayout, RWDeviceAddress, ShaderType, TypeLayout, bytemuck,
 };
 
-use crate::tile_tensor::{DevicePointerEngine, TensorLayout, TileTensor};
+use crate::tile_tensor::{DevicePointerEngine, Mutable, TensorAccess, TensorLayout, TileTensor};
 
 macro_rules! impl_device_tensor {
-    ($name:ident, $address:ident, $doc:literal) => {
+    ($name:ident, $address:ident, [$($access_param:ident)?] $access:ty, $doc:literal) => {
         #[doc = $doc]
         #[repr(C)]
         pub struct $name<DType: ShaderType, LayoutType> {
@@ -65,13 +65,14 @@ macro_rules! impl_device_tensor {
         {
         }
 
-        impl<DType, LayoutType> From<&TileTensor<DType, LayoutType, DevicePointerEngine>>
+        impl<DType, LayoutType $(, $access_param: TensorAccess)?>
+            From<&TileTensor<'_, DType, LayoutType, DevicePointerEngine, $access>>
             for $name<DType, LayoutType>
         where
             DType: ShaderType,
             LayoutType: TensorLayout + Copy,
         {
-            fn from(value: &TileTensor<DType, LayoutType, DevicePointerEngine>) -> Self {
+            fn from(value: &TileTensor<'_, DType, LayoutType, DevicePointerEngine, $access>) -> Self {
                 Self::new(value.storage(), value.layout())
             }
         }
@@ -99,10 +100,15 @@ macro_rules! impl_device_tensor {
     };
 }
 
-impl_device_tensor!(DeviceTensor, DeviceAddress, "A tensor a shader may read.");
+impl_device_tensor!(
+    DeviceTensor,
+    DeviceAddress,
+    [Access] Access,
+    "A tensor a shader may read."
+);
 impl_device_tensor!(
     RWDeviceTensor,
     RWDeviceAddress,
+    [] Mutable,
     "A tensor a shader may read and write."
 );
-

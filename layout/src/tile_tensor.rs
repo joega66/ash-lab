@@ -1,4 +1,4 @@
-use core::ops::{Index, IndexMut};
+use core::ops::{Deref, Index, IndexMut};
 
 use gpu::DeviceBuffer;
 
@@ -55,14 +55,20 @@ pub trait TensorStorage {
     type DType;
     type Engine: TensorEngine;
 
-    fn into_storage(self) -> <Self::Engine as TensorEngine>::StorageType<Self::DType>;
+    fn as_storage(&self) -> &<Self::Engine as TensorEngine>::StorageType<Self::DType>;
+
+    fn as_storage_mut(&mut self) -> &mut <Self::Engine as TensorEngine>::StorageType<Self::DType>;
 }
 
 impl<T> TensorStorage for DeviceBuffer<T> {
     type DType = T;
     type Engine = DevicePointerEngine;
 
-    fn into_storage(self) -> DeviceBuffer<T> {
+    fn as_storage(&self) -> &DeviceBuffer<T> {
+        self
+    }
+
+    fn as_storage_mut(&mut self) -> &mut DeviceBuffer<T> {
         self
     }
 }
@@ -71,23 +77,90 @@ impl<T> TensorStorage for Vec<T> {
     type DType = T;
     type Engine = DefaultEngine;
 
-    fn into_storage(self) -> Vec<T> {
+    fn as_storage(&self) -> &Vec<T> {
+        self
+    }
+
+    fn as_storage_mut(&mut self) -> &mut Vec<T> {
         self
     }
 }
 
-pub struct TileTensor<DType, LayoutType: TensorLayout, Engine: TensorEngine = DevicePointerEngine> {
-    storage: Engine::StorageType<DType>,
+/// Whether a [`TileTensor`] borrows its storage shared ([`Immutable`]) or exclusively ([`Mutable`]).
+pub trait TensorAccess {
+    type Ref<'a, T: 'a>: Deref<Target = T>;
+}
+
+pub struct Immutable;
+
+impl TensorAccess for Immutable {
+    type Ref<'a, T: 'a> = &'a T;
+}
+
+pub struct Mutable;
+
+impl TensorAccess for Mutable {
+    type Ref<'a, T: 'a> = &'a mut T;
+}
+
+/// A borrow of storage a [`TileTensor`] can be built over: `&S` or `&mut S`.
+pub trait StorageRef<'a> {
+    type DType;
+    type Engine: TensorEngine;
+    type Access: TensorAccess;
+
+    fn into_ref(self) -> TensorRef<'a, Self::DType, Self::Engine, Self::Access>;
+}
+
+type TensorRef<'a, DType, Engine, Access> =
+    <Access as TensorAccess>::Ref<'a, <Engine as TensorEngine>::StorageType<DType>>;
+
+impl<'a, S: TensorStorage> StorageRef<'a> for &'a S {
+    type DType = S::DType;
+    type Engine = S::Engine;
+    type Access = Immutable;
+
+    fn into_ref(self) -> &'a <S::Engine as TensorEngine>::StorageType<S::DType> {
+        self.as_storage()
+    }
+}
+
+impl<'a, S: TensorStorage> StorageRef<'a> for &'a mut S {
+    type DType = S::DType;
+    type Engine = S::Engine;
+    type Access = Mutable;
+
+    fn into_ref(self) -> &'a mut <S::Engine as TensorEngine>::StorageType<S::DType> {
+        self.as_storage_mut()
+    }
+}
+
+pub struct TileTensor<
+    'a,
+    DType,
+    LayoutType: TensorLayout,
+    Engine: TensorEngine = DevicePointerEngine,
+    Access: TensorAccess = Immutable,
+> where
+    Engine::StorageType<DType>: 'a,
+{
+    storage: TensorRef<'a, DType, Engine, Access>,
     layout: LayoutType,
 }
 
-impl<DType, LayoutType: TensorLayout, Engine: TensorEngine> TileTensor<DType, LayoutType, Engine> {
+impl<'a, DType, LayoutType, Engine, Access> TileTensor<'a, DType, LayoutType, Engine, Access>
+where
+    LayoutType: TensorLayout,
+    Engine: TensorEngine,
+    Access: TensorAccess,
+    Engine::StorageType<DType>: 'a,
+{
     pub fn new<S>(storage: S, layout: LayoutType) -> Self
     where
-        S: TensorStorage<DType = DType, Engine = Engine>,
+        S: StorageRef<'a, DType = DType, Engine = Engine, Access = Access>,
     {
         Self {
-            storage: storage.into_storage(),
+            storage: storage.into_ref(),
             layout,
         }
     }
@@ -97,7 +170,7 @@ impl<DType, LayoutType: TensorLayout, Engine: TensorEngine> TileTensor<DType, La
     }
 
     pub(crate) fn storage(&self) -> &Engine::StorageType<DType> {
-        &self.storage
+        &*self.storage
     }
 
     pub(crate) fn layout(&self) -> LayoutType
@@ -127,11 +200,13 @@ impl<DType, LayoutType: TensorLayout, Engine: TensorEngine> TileTensor<DType, La
 /// on the storage rather than on a particular engine, which is what leaves out
 /// [`DevicePointerEngine`]: a [`DeviceBuffer`] is GPU memory and needs
 /// [`map_to_host`](DeviceBuffer::map_to_host) and a device context before the host may read it.
-impl<DType, LayoutType, Engine> Index<Coords<LayoutType>> for TileTensor<DType, LayoutType, Engine>
+impl<'a, DType, LayoutType, Engine, Access> Index<Coords<LayoutType>>
+    for TileTensor<'a, DType, LayoutType, Engine, Access>
 where
     LayoutType: TensorLayout,
     Engine: TensorEngine,
-    Engine::StorageType<DType>: Index<usize, Output = DType>,
+    Access: TensorAccess,
+    Engine::StorageType<DType>: Index<usize, Output = DType> + 'a,
 {
     type Output = DType;
 
@@ -141,12 +216,12 @@ where
     }
 }
 
-impl<DType, LayoutType, Engine> IndexMut<Coords<LayoutType>>
-    for TileTensor<DType, LayoutType, Engine>
+impl<'a, DType, LayoutType, Engine> IndexMut<Coords<LayoutType>>
+    for TileTensor<'a, DType, LayoutType, Engine, Mutable>
 where
     LayoutType: TensorLayout,
     Engine: TensorEngine,
-    Engine::StorageType<DType>: IndexMut<usize, Output = DType>,
+    Engine::StorageType<DType>: IndexMut<usize, Output = DType> + 'a,
 {
     #[inline]
     fn index_mut(&mut self, crd: Coords<LayoutType>) -> &mut DType {
