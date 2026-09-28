@@ -251,7 +251,7 @@ fn main() {
                 .iter()
                 .find(|x| x.name == function.entry_point())
                 .expect(&format!("missing entry point {}", function.entry_point()));
-
+            
             let expected_push_constant = reflected_push_constant(
                 &reflection,
                 entry_point,

@@ -74,6 +74,7 @@ pub struct DeviceContext {
     functions: HashMap<std::any::TypeId, StaticDeviceFunctionArray>,
 
     buffers: Arena<DeviceBufferInner>,
+    images: Arena<DeviceImageInner>,
 
     builder: DeviceGraphBuilder,
 
@@ -178,10 +179,58 @@ impl DeviceContext {
             shaders,
             functions,
             buffers: Arena::new(),
+            images: Arena::new(),
             builder: DeviceGraphBuilder::new(),
             device: DeviceOwner::new(device),
             instance: InstanceOwner::new(instance),
             entry,
+        }
+    }
+
+    /// Creates a buffer synchronously using the DeviceBuffer constructor.
+    /// This overload accepts lower-level [`vk_mem`] allocation info.
+    fn create_buffer_inner<T>(
+        &mut self,
+        name: &str,
+        size: usize,
+        usage: vk::BufferUsageFlags,
+        memory_info: &vk_mem::AllocationCreateInfo,
+    ) -> DeviceBuffer<T> {
+        let create_info = vk::BufferCreateInfo::default()
+            .size(size as vk::DeviceSize)
+            .usage(usage);
+
+        let (buffer, allocation) = unsafe {
+            self.mem_allocator
+                .create_buffer(&create_info, &memory_info)
+                .expect("failed to create a buffer with VMA")
+        };
+
+        let address = unsafe {
+            if (usage & vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
+                == vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+            {
+                self.device.get_buffer_device_address(
+                    &vk::BufferDeviceAddressInfo::default().buffer(buffer),
+                )
+            } else {
+                0
+            }
+        };
+
+        let handle = self.buffers.insert(DeviceBufferInner {
+            buffer,
+            size,
+            allocation,
+            address,
+        });
+
+        DeviceBuffer::<T> {
+            label: String::from(name),
+            handle,
+            size,
+            trash_tx: self.trash_tx.clone(),
+            _marker: PhantomData::default(),
         }
     }
 
@@ -228,6 +277,36 @@ impl DeviceContext {
             default_buffer_usage() | vk::BufferUsageFlags::UNIFORM_BUFFER,
             &memory_info,
         )
+    }
+
+    /// Creates a [`DeviceImage`] synchronously using the DeviceImage constructor.
+    /// This overload accepts an externally created [`vk::Image`] along with its default
+    /// [`vk::ImageView`].
+    fn create_image_imported(
+        &mut self,
+        image: vk::Image,
+        image_view: vk::ImageView,
+        _create_info: &DeviceImageCreateInfo,
+        subresource_range: &vk::ImageSubresourceRange,
+    ) -> DeviceImage {
+        let handle = self.images.insert(DeviceImageInner {
+            image,
+            image_view,
+            subresource_range: subresource_range.clone(),
+            allocation: None,
+        });
+        DeviceImage {
+            handle,
+            trash_tx: self.trash_tx.clone(),
+        }
+    }
+
+    pub fn buffer(&self, handle: Handle<DeviceBufferInner>) -> &DeviceBufferInner {
+        self.buffers.get(handle).unwrap()
+    }
+
+    pub fn image(&self, handle: Handle<DeviceImageInner>) -> &DeviceImageInner {
+        self.images.get(handle).unwrap()
     }
 
     /// Compiles the provided function for execution on this device.
@@ -321,24 +400,25 @@ impl DeviceContext {
 
     /// Enqueues an operation to fill this buffer with a specified value.
     pub fn enqueue_fill<T: U32Castable + 'static>(&mut self, input: &DeviceBuffer<T>, value: T) {
-        let input = input.clone();
+        let input = input.handle();
         let value = value.to_u32();
         self.enqueue_pass(
             "enqueue_fill",
             &[DgBufferTransition {
-                buffer: input.buffer(),
+                buffer: input,
                 kind: DgAccessKind::Write,
                 stage: vk::PipelineStageFlags2::TRANSFER,
                 access: vk::AccessFlags2::TRANSFER_WRITE,
             }],
             &[],
-            Box::new(move |ctx, command_buffer| {
+            Box::new(move |ctx, cmd_buf| {
+                let input = ctx.buffers.get(input).unwrap();
                 unsafe {
                     ctx.device.cmd_fill_buffer(
-                        command_buffer,
-                        input.buffer(),
+                        cmd_buf,
+                        input.buffer,
                         0,
-                        input.size() as vk::DeviceSize,
+                        input.size as vk::DeviceSize,
                         value,
                     )
                 };
@@ -459,11 +539,11 @@ impl DeviceContext {
         let mut transitions: Vec<DgBufferTransition> = parameters
             .iter()
             .map(|param| {
-                let buffer = self.buffers.get(param.handle).unwrap().buffer;
+                let handle = param.handle;
                 match param.kind {
-                    DescriptorKind::ConstantBuffer => constant_buffer_read(buffer, stage),
-                    DescriptorKind::StructuredBuffer => storage_buffer_read(buffer, stage),
-                    DescriptorKind::RWStructuredBuffer => storage_buffer_read_write(buffer, stage),
+                    DescriptorKind::ConstantBuffer => constant_buffer_read(handle, stage),
+                    DescriptorKind::StructuredBuffer => storage_buffer_read(handle, stage),
+                    DescriptorKind::RWStructuredBuffer => storage_buffer_read_write(handle, stage),
                 }
             })
             .collect();
@@ -501,119 +581,109 @@ impl DeviceContext {
             std::any::type_name::<T>(),
             &transitions,
             &[],
-            Box::new(
-                move |ctx: &mut DeviceContext, command_buffer: vk::CommandBuffer| {
-                    let push_constant_bytes = if address_slots.is_empty() {
-                        push_constant_bytes.clone()
-                    } else {
-                        let mut bytes = push_constant_bytes.clone();
-                        for slot in address_slots.iter() {
-                            let at = slot.offset as usize;
-                            let raw = u64::from_ne_bytes(
-                                bytes[at..at + 8].try_into().expect("slot is 8 bytes"),
-                            );
-                            let handle = Handle::<DeviceBufferInner>::from_u64(raw);
-                            let buffer = ctx.buffers.get(handle).unwrap();
-                            bytes[at..at + 8].copy_from_slice(&buffer.address.to_ne_bytes());
-                        }
-                        bytes
-                    };
-
-                    let set = (!parameters.is_empty()).then(|| {
-                        let buffers: Vec<vk::Buffer> = parameters
-                            .iter()
-                            .map(|arg| match arg.kind {
-                                DescriptorKind::ConstantBuffer
-                                | DescriptorKind::StructuredBuffer
-                                | DescriptorKind::RWStructuredBuffer => {
-                                    let buffer = ctx.buffers.get(arg.handle).unwrap();
-                                    buffer.buffer
-                                }
-                            })
-                            .collect();
-
-                        // TODO: Batch all descriptor set allocations + updates in graph preamble
-                        let mut set_allocators = std::mem::take(&mut ctx.set_allocators);
-                        let set_allocator = set_allocators.get_mut(&set_layout).unwrap();
-                        let result =
-                            set_allocator.allocate_descriptor_set(ctx, set_layout, buffers);
-                        ctx.set_allocators = set_allocators;
-
-                        match result {
-                            DescriptorSetCacheLookup::Miss(set) => {
-                                let mut buffer_infos = Vec::new();
-                                for arg in &parameters {
-                                    if arg.kind.is_buffer() {
-                                        let buffer = ctx.buffers.get(arg.handle).unwrap();
-                                        let buffer_info = vec![
-                                            vk::DescriptorBufferInfo::default()
-                                                .buffer(buffer.buffer)
-                                                .offset(0)
-                                                .range(buffer.size as vk::DeviceSize),
-                                        ];
-                                        buffer_infos.push(buffer_info);
-                                    }
-                                }
-                                let mut writes = Vec::new();
-                                let mut buffer_info_idx = 0;
-                                for (i, arg) in parameters.iter().enumerate() {
-                                    let mut write = vk::WriteDescriptorSet::default()
-                                        .dst_set(set)
-                                        .dst_binding(i as u32)
-                                        .dst_array_element(0)
-                                        .descriptor_count(1)
-                                        .descriptor_type(arg.kind.into());
-                                    if arg.kind.is_buffer() {
-                                        write = write.buffer_info(&buffer_infos[buffer_info_idx]);
-                                        buffer_info_idx += 1;
-                                    } else {
-                                        unimplemented!();
-                                    }
-                                    writes.push(write);
-                                }
-                                unsafe {
-                                    ctx.device.update_descriptor_sets(&writes, &[]);
-                                }
-                                set
-                            }
-                            DescriptorSetCacheLookup::Hit(set) => set,
-                        }
-                    });
-
-                    unsafe {
-                        ctx.device.cmd_bind_pipeline(
-                            command_buffer,
-                            vk::PipelineBindPoint::COMPUTE,
-                            pipeline,
+            Box::new(move |ctx: &mut DeviceContext, cmd_buf: vk::CommandBuffer| {
+                let push_constant_bytes = if address_slots.is_empty() {
+                    push_constant_bytes.clone()
+                } else {
+                    let mut bytes = push_constant_bytes.clone();
+                    for slot in address_slots.iter() {
+                        let at = slot.offset as usize;
+                        let raw = u64::from_ne_bytes(
+                            bytes[at..at + 8].try_into().expect("slot is 8 bytes"),
                         );
-                        if let Some(set) = set {
-                            ctx.device.cmd_bind_descriptor_sets(
-                                command_buffer,
-                                vk::PipelineBindPoint::COMPUTE,
-                                pipeline_layout,
-                                0,
-                                &[set],
-                                &[],
-                            );
+                        let handle = Handle::<DeviceBufferInner>::from_u64(raw);
+                        let buffer = ctx.buffers.get(handle).unwrap();
+                        bytes[at..at + 8].copy_from_slice(&buffer.address.to_ne_bytes());
+                    }
+                    bytes
+                };
+
+                let set = (!parameters.is_empty()).then(|| {
+                    let buffers: Vec<vk::Buffer> = parameters
+                        .iter()
+                        .map(|arg| match arg.kind {
+                            DescriptorKind::ConstantBuffer
+                            | DescriptorKind::StructuredBuffer
+                            | DescriptorKind::RWStructuredBuffer => {
+                                let buffer = ctx.buffers.get(arg.handle).unwrap();
+                                buffer.buffer
+                            }
+                        })
+                        .collect();
+
+                    // TODO: Batch all descriptor set allocations + updates in graph preamble
+                    let mut set_allocators = std::mem::take(&mut ctx.set_allocators);
+                    let set_allocator = set_allocators.get_mut(&set_layout).unwrap();
+                    let result = set_allocator.allocate_descriptor_set(ctx, set_layout, buffers);
+                    ctx.set_allocators = set_allocators;
+
+                    match result {
+                        DescriptorSetCacheLookup::Miss(set) => {
+                            let mut buffer_infos = Vec::new();
+                            for arg in &parameters {
+                                if arg.kind.is_buffer() {
+                                    let buffer = ctx.buffers.get(arg.handle).unwrap();
+                                    let buffer_info = vec![
+                                        vk::DescriptorBufferInfo::default()
+                                            .buffer(buffer.buffer)
+                                            .offset(0)
+                                            .range(buffer.size as vk::DeviceSize),
+                                    ];
+                                    buffer_infos.push(buffer_info);
+                                }
+                            }
+                            let mut writes = Vec::new();
+                            let mut buffer_info_idx = 0;
+                            for (i, arg) in parameters.iter().enumerate() {
+                                let mut write = vk::WriteDescriptorSet::default()
+                                    .dst_set(set)
+                                    .dst_binding(i as u32)
+                                    .dst_array_element(0)
+                                    .descriptor_count(1)
+                                    .descriptor_type(arg.kind.into());
+                                if arg.kind.is_buffer() {
+                                    write = write.buffer_info(&buffer_infos[buffer_info_idx]);
+                                    buffer_info_idx += 1;
+                                } else {
+                                    unimplemented!();
+                                }
+                                writes.push(write);
+                            }
+                            unsafe {
+                                ctx.device.update_descriptor_sets(&writes, &[]);
+                            }
+                            set
                         }
-                        if !push_constant_bytes.is_empty() {
-                            ctx.device.cmd_push_constants(
-                                command_buffer,
-                                pipeline_layout,
-                                vk::ShaderStageFlags::COMPUTE,
-                                0,
-                                &push_constant_bytes,
-                            );
-                        }
-                        ctx.device.cmd_dispatch(
-                            command_buffer,
-                            grid_dim.x(),
-                            grid_dim.y(),
-                            grid_dim.z(),
+                        DescriptorSetCacheLookup::Hit(set) => set,
+                    }
+                });
+
+                unsafe {
+                    ctx.device
+                        .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::COMPUTE, pipeline);
+                    if let Some(set) = set {
+                        ctx.device.cmd_bind_descriptor_sets(
+                            cmd_buf,
+                            vk::PipelineBindPoint::COMPUTE,
+                            pipeline_layout,
+                            0,
+                            &[set],
+                            &[],
                         );
                     }
-                },
-            ),
+                    if !push_constant_bytes.is_empty() {
+                        ctx.device.cmd_push_constants(
+                            cmd_buf,
+                            pipeline_layout,
+                            vk::ShaderStageFlags::COMPUTE,
+                            0,
+                            &push_constant_bytes,
+                        );
+                    }
+                    ctx.device
+                        .cmd_dispatch(cmd_buf, grid_dim.x(), grid_dim.y(), grid_dim.z());
+                }
+            }),
         );
     }
 
@@ -665,7 +735,7 @@ impl DeviceContext {
     }
 
     // TODO: Return the executed graph in a pretty form
-    pub fn execute(&mut self, present: Option<DeviceImage>) -> Result<(), String> {
+    pub fn execute(&mut self, present: Option<&DeviceImage>) -> Result<(), String> {
         let result = self.execute_inner(present);
 
         self.garbage_collection();
@@ -675,7 +745,7 @@ impl DeviceContext {
         result
     }
 
-    fn execute_inner(&mut self, present: Option<DeviceImage>) -> Result<(), String> {
+    fn execute_inner(&mut self, present: Option<&DeviceImage>) -> Result<(), String> {
         // Sort passes.
         let order = self.topological_sort()?;
 
@@ -686,7 +756,7 @@ impl DeviceContext {
         };
 
         // Start recording.
-        let command_buffer = unsafe {
+        let cmd_buf = unsafe {
             self.device
                 .allocate_command_buffers(
                     &vk::CommandBufferAllocateInfo::default()
@@ -701,7 +771,7 @@ impl DeviceContext {
         };
         unsafe {
             self.device
-                .begin_command_buffer(command_buffer, &vk::CommandBufferBeginInfo::default())
+                .begin_command_buffer(cmd_buf, &vk::CommandBufferBeginInfo::default())
                 .expect("failed to begin recording command buffer");
         }
 
@@ -718,21 +788,21 @@ impl DeviceContext {
                     .memory_barriers(&memory_barriers)
                     .image_memory_barriers(&image_memory_barriers);
                 unsafe {
-                    self.device
-                        .cmd_pipeline_barrier2(command_buffer, &dependency_info);
+                    self.device.cmd_pipeline_barrier2(cmd_buf, &dependency_info);
                 }
             }
 
-            pass.function.as_ref()(self, command_buffer);
+            pass.function.as_ref()(self, cmd_buf);
         }
         drop(passes);
 
         if let Some(present) = present {
             let prev = states
                 .images
-                .entry(present.image())
+                .entry(present.handle())
                 .or_insert(DgImageState::initial());
             if prev.layout != vk::ImageLayout::PRESENT_SRC_KHR {
+                let present = self.images.get(present.handle()).unwrap();
                 let image_memory_barriers = [vk::ImageMemoryBarrier2::default()
                     .src_stage_mask(prev.stage)
                     .src_access_mask(prev.access)
@@ -740,8 +810,8 @@ impl DeviceContext {
                     .dst_access_mask(vk::AccessFlags2::NONE)
                     .old_layout(prev.layout)
                     .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-                    .image(present.image())
-                    .subresource_range(*present.subresource_range())];
+                    .image(present.image)
+                    .subresource_range(present.subresource_range)];
 
                 let dependency_info = &vk::DependencyInfo::default()
                     .dependency_flags(vk::DependencyFlags::BY_REGION)
@@ -749,8 +819,7 @@ impl DeviceContext {
                     .image_memory_barriers(&image_memory_barriers);
 
                 unsafe {
-                    self.device
-                        .cmd_pipeline_barrier2(command_buffer, dependency_info);
+                    self.device.cmd_pipeline_barrier2(cmd_buf, dependency_info);
                 }
             }
         }
@@ -758,23 +827,19 @@ impl DeviceContext {
         // Stop recording.
         unsafe {
             self.device
-                .end_command_buffer(command_buffer)
+                .end_command_buffer(cmd_buf)
                 .expect("failed to end recording command buffer");
         }
 
         // Submit commands.
-        self.queue_submit(
-            QueueType::Graphics,
-            command_buffer,
-            vk::PipelineStageFlags2::NONE,
-        );
+        self.queue_submit(QueueType::Graphics, cmd_buf, vk::PipelineStageFlags2::NONE);
 
         // Cleanup.
         let command_pool = self.graphics_command_pool.clone();
         let _ = self
             .trash_tx
             .send(Trash::Generic(Box::new(move |device| unsafe {
-                device.free_command_buffers(command_pool, &[command_buffer]);
+                device.free_command_buffers(command_pool, &[cmd_buf]);
             })));
 
         Ok(())
@@ -846,9 +911,15 @@ impl DeviceContext {
 
     fn merged_buffer_uses(
         pass: &DgPass,
-    ) -> Vec<(vk::Buffer, vk::PipelineStageFlags2, vk::AccessFlags2)> {
-        let mut map: HashMap<vk::Buffer, (vk::PipelineStageFlags2, vk::AccessFlags2)> =
-            HashMap::new();
+    ) -> Vec<(
+        Handle<DeviceBufferInner>,
+        vk::PipelineStageFlags2,
+        vk::AccessFlags2,
+    )> {
+        let mut map: HashMap<
+            Handle<DeviceBufferInner>,
+            (vk::PipelineStageFlags2, vk::AccessFlags2),
+        > = HashMap::new();
         for t in &pass.barrier.buffers {
             let e = map
                 .entry(t.buffer)
@@ -857,45 +928,34 @@ impl DeviceContext {
             e.1 |= t.access;
         }
         let mut v: Vec<_> = map.into_iter().map(|(i, (s, a))| (i, s, a)).collect();
-        v.sort_by_key(|(i, _, _)| *i);
+        v.sort_by_key(|(i, _, _)| i.as_u64());
         v
     }
 
     fn merged_image_uses(
         pass: &DgPass,
     ) -> Vec<(
-        vk::Image,
-        vk::ImageSubresourceRange,
+        Handle<DeviceImageInner>,
         vk::PipelineStageFlags2,
         vk::AccessFlags2,
         vk::ImageLayout,
     )> {
         let mut map: HashMap<
-            vk::Image,
-            (
-                vk::ImageSubresourceRange,
-                vk::PipelineStageFlags2,
-                vk::AccessFlags2,
-                vk::ImageLayout,
-            ),
+            Handle<DeviceImageInner>,
+            (vk::PipelineStageFlags2, vk::AccessFlags2, vk::ImageLayout),
         > = HashMap::new();
         for t in &pass.barrier.images {
             let e = map.entry(t.image).or_insert((
-                vk::ImageSubresourceRange::default(),
                 vk::PipelineStageFlags2::NONE,
                 vk::AccessFlags2::NONE,
                 t.layout,
             ));
-            e.0 = t.subresource_range;
-            e.1 |= t.stage;
-            e.2 |= t.access;
-            e.3 = t.layout;
+            e.0 |= t.stage;
+            e.1 |= t.access;
+            e.2 = t.layout;
         }
-        let mut v: Vec<_> = map
-            .into_iter()
-            .map(|(i, (r, s, a, l))| (i, r, s, a, l))
-            .collect();
-        v.sort_by_key(|(i, _, _, _, _)| *i);
+        let mut v: Vec<_> = map.into_iter().map(|(i, (s, a, l))| (i, s, a, l)).collect();
+        v.sort_by_key(|(i, _, _, _)| i.as_u64());
         v
     }
 
@@ -943,9 +1003,7 @@ impl DeviceContext {
             );
         }
 
-        for (image, subresource_range, dst_stage, dst_access, new_layout) in
-            Self::merged_image_uses(pass)
-        {
+        for (image, dst_stage, dst_access, new_layout) in Self::merged_image_uses(pass) {
             let prev = states
                 .images
                 .entry(image)
@@ -954,6 +1012,7 @@ impl DeviceContext {
             let layout_change = prev.layout != new_layout;
 
             if layout_change || prev.was_write || cur_write {
+                let image = self.images.get(image).unwrap();
                 image_memory_barriers.push(
                     vk::ImageMemoryBarrier2::default()
                         .src_stage_mask(prev.stage)
@@ -962,8 +1021,8 @@ impl DeviceContext {
                         .dst_access_mask(dst_access)
                         .old_layout(prev.layout)
                         .new_layout(new_layout)
-                        .image(image)
-                        .subresource_range(subresource_range),
+                        .image(image.image)
+                        .subresource_range(image.subresource_range),
                 );
             }
 
@@ -999,11 +1058,10 @@ impl DeviceContext {
                         .unwrap(),
                 );
                 let handle = Handle::<DeviceBufferInner>::from_u64(raw);
-                let buffer = self.buffers.get(handle).unwrap();
                 if slot.writable {
-                    storage_buffer_read_write(buffer.buffer, stage)
+                    storage_buffer_read_write(handle, stage)
                 } else {
-                    storage_buffer_read(buffer.buffer, stage)
+                    storage_buffer_read(handle, stage)
                 }
             })
             .collect()
@@ -1626,11 +1684,10 @@ impl DeviceContext {
         }
     }
 
-    /// Submit
     fn queue_submit(
         &mut self,
         queue_type: QueueType,
-        command_buffer: vk::CommandBuffer,
+        cmd_buf: vk::CommandBuffer,
         wait_stage: vk::PipelineStageFlags2,
     ) {
         let (queue, queue_timeline) = match queue_type {
@@ -1648,8 +1705,7 @@ impl DeviceContext {
             .semaphore(queue_timeline.semaphore)
             .value(queue_timeline.value)];
 
-        let command_buffer_infos =
-            [vk::CommandBufferSubmitInfo::default().command_buffer(command_buffer)];
+        let command_buffer_infos = [vk::CommandBufferSubmitInfo::default().command_buffer(cmd_buf)];
 
         let submit_info = vk::SubmitInfo2::default()
             .wait_semaphore_infos(&wait_semaphore_infos)
@@ -1687,80 +1743,6 @@ impl DeviceContext {
                 permutation.defines()
             ));
         function
-    }
-}
-
-impl DeviceContext {
-    /// Creates a buffer synchronously using the DeviceBuffer constructor.
-    /// This overload accepts lower-level [`vk_mem`] allocation info.
-    fn create_buffer_inner<T>(
-        &mut self,
-        name: &str,
-        size: usize,
-        usage: vk::BufferUsageFlags,
-        memory_info: &vk_mem::AllocationCreateInfo,
-    ) -> DeviceBuffer<T> {
-        let create_info = vk::BufferCreateInfo::default()
-            .size(size as vk::DeviceSize)
-            .usage(usage);
-
-        let (buffer, allocation) = unsafe {
-            self.mem_allocator
-                .create_buffer(&create_info, &memory_info)
-                .expect("failed to create a buffer with VMA")
-        };
-
-        let address = unsafe {
-            if (usage & vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
-                == vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-            {
-                self.device.get_buffer_device_address(
-                    &vk::BufferDeviceAddressInfo::default().buffer(buffer),
-                )
-            } else {
-                0
-            }
-        };
-
-        let handle = self.buffers.insert(DeviceBufferInner {
-            buffer,
-            size,
-            allocation,
-            address,
-        });
-
-        DeviceBuffer::<T> {
-            shared: Rc::new(DeviceBufferShared {
-                label: String::from(name),
-                handle,
-                buffer,
-                size,
-                trash_tx: self.trash_tx.clone(),
-            }),
-            _marker: PhantomData::default(),
-        }
-    }
-
-    /// Creates a [`DeviceImage`] synchronously using the DeviceImage constructor.
-    /// This overload accepts an externally created [`vk::Image`] along with its default
-    /// [`vk::ImageView`].
-    fn create_image_imported(
-        &mut self,
-        image: vk::Image,
-        image_view: vk::ImageView,
-        create_info: &DeviceImageCreateInfo,
-        subresource_range: &vk::ImageSubresourceRange,
-    ) -> DeviceImage {
-        DeviceImage {
-            shared: Rc::new(DeviceImageShared {
-                image,
-                image_view,
-                create_info: create_info.clone(),
-                subresource_range: subresource_range.clone(),
-                allocation: None,
-                trash_tx: self.trash_tx.clone(),
-            }),
-        }
     }
 
     /// Maps this device memory to host memory for CPU access.
@@ -1806,6 +1788,7 @@ impl DeviceContext {
                 trash.1,
                 &self.device,
                 &mut self.buffers,
+                &mut self.images,
                 &mut self.mem_allocator,
             );
         }
@@ -1822,6 +1805,7 @@ impl DeviceContext {
         trash: Trash,
         device: &Device,
         buffers: &mut Arena<DeviceBufferInner>,
+        images: &mut Arena<DeviceImageInner>,
         mem_allocator: &mut vk_mem::Allocator,
     ) {
         match trash {
@@ -1829,10 +1813,11 @@ impl DeviceContext {
                 let mut buffer = buffers.remove(handle).unwrap();
                 mem_allocator.destroy_buffer(buffer.buffer, &mut buffer.allocation);
             },
-            Trash::Image((image, image_view, allocation)) => unsafe {
-                device.destroy_image_view(image_view, None);
-                if let Some(mut allocation) = allocation {
-                    mem_allocator.destroy_image(image, &mut allocation);
+            Trash::Image(handle) => unsafe {
+                let handle = images.remove(handle).unwrap();
+                device.destroy_image_view(handle.image_view, None);
+                if let Some(mut allocation) = handle.allocation {
+                    mem_allocator.destroy_image(handle.image, &mut allocation);
                 }
             },
             Trash::Generic(function) => function(device),
@@ -1891,6 +1876,7 @@ impl Drop for DeviceContext {
                 trash,
                 &self.device,
                 &mut self.buffers,
+                &mut self.images,
                 &mut self.mem_allocator,
             );
         }
@@ -1981,7 +1967,7 @@ pub enum QueueType {
 
 enum Trash {
     Buffer(Handle<DeviceBufferInner>),
-    Image((vk::Image, vk::ImageView, Option<vk_mem::Allocation>)),
+    Image(Handle<DeviceImageInner>),
     Generic(Box<dyn Fn(&Device)>),
 }
 
@@ -1999,40 +1985,35 @@ pub struct DeviceBufferInner {
     address: vk::DeviceAddress,
 }
 
-struct DeviceBufferShared {
-    label: String,
-    handle: Handle<DeviceBufferInner>,
-    buffer: vk::Buffer,
-    size: usize,
-    trash_tx: Sender<Trash>,
-}
+impl DeviceBufferInner {
+    pub fn buffer(&self) -> vk::Buffer {
+        self.buffer
+    }
 
-impl Drop for DeviceBufferShared {
-    fn drop(&mut self) {
-        let _ = self.trash_tx.send(Trash::Buffer(self.handle));
+    pub fn size(&self) -> usize {
+        self.size
     }
 }
 
 pub struct DeviceBuffer<T> {
-    shared: Rc<DeviceBufferShared>,
+    label: String,
+    handle: Handle<DeviceBufferInner>,
+    size: usize,
+    trash_tx: Sender<Trash>,
     _marker: PhantomData<T>,
 }
 
 impl<T> DeviceBuffer<T> {
     pub fn name(&self) -> &str {
-        &self.shared.label
+        &self.label
     }
 
-    pub(crate) fn handle(&self) -> Handle<DeviceBufferInner> {
-        self.shared.handle
-    }
-
-    pub fn buffer(&self) -> vk::Buffer {
-        self.shared.buffer
+    pub fn handle(&self) -> Handle<DeviceBufferInner> {
+        self.handle
     }
 
     pub fn size(&self) -> usize {
-        self.shared.size
+        self.size
     }
 
     pub fn len(&self) -> usize {
@@ -2044,18 +2025,15 @@ impl<T> DeviceBuffer<T> {
     }
 }
 
-impl<T> Clone for DeviceBuffer<T> {
-    fn clone(&self) -> Self {
-        Self {
-            shared: self.shared.clone(),
-            _marker: self._marker.clone(),
-        }
+impl<T> Drop for DeviceBuffer<T> {
+    fn drop(&mut self) {
+        let _ = self.trash_tx.send(Trash::Buffer(self.handle));
     }
 }
 
 impl<T: AnyBitPattern> DeviceBuffer<T> {
     pub fn map_to_host<'a>(&self, ctx: &'a DeviceContext) -> HostMappedMemory<'a, T> {
-        let allocation = ctx.buffers.get(self.shared.handle).unwrap().allocation;
+        let allocation = ctx.buffers.get(self.handle).unwrap().allocation;
         let raw = ctx.map_memory(allocation, self.size());
         let raw = bytemuck::cast_slice(raw);
         HostMappedMemory::<'a, T> {
@@ -2098,46 +2076,44 @@ impl<T: fmt::Debug> fmt::Debug for HostMappedMemory<'_, T> {
     }
 }
 
-struct DeviceImageShared {
+pub struct DeviceImageInner {
     image: vk::Image,
     image_view: vk::ImageView,
-    create_info: DeviceImageCreateInfo,
     subresource_range: vk::ImageSubresourceRange,
     allocation: Option<vk_mem::Allocation>,
-    trash_tx: Sender<Trash>,
 }
 
-impl Drop for DeviceImageShared {
-    fn drop(&mut self) {
-        let _ = self
-            .trash_tx
-            .send(Trash::Image((self.image, self.image_view, self.allocation)));
+impl DeviceImageInner {
+    pub fn image(&self) -> vk::Image {
+        self.image
+    }
+
+    pub fn image_view(&self) -> vk::ImageView {
+        self.image_view
+    }
+
+    pub fn subresource_range(&self) -> &vk::ImageSubresourceRange {
+        &self.subresource_range
     }
 }
 
 #[derive(Clone)]
 pub struct DeviceImageCreateInfo {}
 
-#[derive(Clone)]
 pub struct DeviceImage {
-    shared: Rc<DeviceImageShared>,
+    handle: Handle<DeviceImageInner>,
+    trash_tx: Sender<Trash>,
 }
 
 impl DeviceImage {
-    pub fn image(&self) -> vk::Image {
-        self.shared.image
+    pub fn handle(&self) -> Handle<DeviceImageInner> {
+        self.handle
     }
+}
 
-    pub fn image_view(&self) -> vk::ImageView {
-        self.shared.image_view
-    }
-
-    pub fn create_info(&self) -> &DeviceImageCreateInfo {
-        &self.shared.create_info
-    }
-
-    pub fn subresource_range(&self) -> &vk::ImageSubresourceRange {
-        &self.shared.subresource_range
+impl Drop for DeviceImage {
+    fn drop(&mut self) {
+        let _ = self.trash_tx.send(Trash::Image(self.handle));
     }
 }
 
@@ -2342,8 +2318,8 @@ macro_rules! enqueue_function {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum DgResource {
-    Buffer(vk::Buffer),
-    Image(vk::Image),
+    Buffer(Handle<DeviceBufferInner>),
+    Image(Handle<DeviceImageInner>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2364,7 +2340,7 @@ enum DgAccessKind {
 
 #[derive(Clone)]
 pub struct DgBufferTransition {
-    buffer: vk::Buffer,
+    buffer: Handle<DeviceBufferInner>,
     kind: DgAccessKind,
     stage: vk::PipelineStageFlags2,
     access: vk::AccessFlags2,
@@ -2372,8 +2348,7 @@ pub struct DgBufferTransition {
 
 #[derive(Clone)]
 pub struct DgImageTransition {
-    image: vk::Image,
-    subresource_range: vk::ImageSubresourceRange,
+    image: Handle<DeviceImageInner>,
     kind: DgAccessKind,
     stage: vk::PipelineStageFlags2,
     access: vk::AccessFlags2,
@@ -2462,25 +2437,23 @@ impl DgImageState {
 }
 
 struct DgStates {
-    buffers: HashMap<vk::Buffer, DgBufferState>,
-    images: HashMap<vk::Image, DgImageState>,
+    buffers: HashMap<Handle<DeviceBufferInner>, DgBufferState>,
+    images: HashMap<Handle<DeviceImageInner>, DgImageState>,
 }
 
 #[allow(dead_code)]
-pub fn sampled_fragment(image: &DeviceImage) -> DgImageTransition {
+pub fn sampled_fragment(image: Handle<DeviceImageInner>) -> DgImageTransition {
     DgImageTransition {
-        image: image.image(),
-        subresource_range: *image.subresource_range(),
+        image: image,
         kind: DgAccessKind::Read,
         stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
         access: vk::AccessFlags2::SHADER_READ,
         layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
     }
 }
-pub fn color_attachment(image: &DeviceImage) -> DgImageTransition {
+pub fn color_attachment(image: Handle<DeviceImageInner>) -> DgImageTransition {
     DgImageTransition {
-        image: image.image(),
-        subresource_range: *image.subresource_range(),
+        image: image,
         kind: DgAccessKind::Write,
         stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
         access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
@@ -2488,10 +2461,9 @@ pub fn color_attachment(image: &DeviceImage) -> DgImageTransition {
     }
 }
 #[allow(dead_code)]
-pub fn depth_attachment(image: &DeviceImage) -> DgImageTransition {
+pub fn depth_attachment(image: Handle<DeviceImageInner>) -> DgImageTransition {
     DgImageTransition {
-        image: image.image(),
-        subresource_range: *image.subresource_range(),
+        image: image,
         kind: DgAccessKind::Write,
         stage: vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
             | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
@@ -2499,7 +2471,7 @@ pub fn depth_attachment(image: &DeviceImage) -> DgImageTransition {
         layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
     }
 }
-pub fn buffer_transfer_read(buffer: vk::Buffer) -> DgBufferTransition {
+pub fn buffer_transfer_read(buffer: Handle<DeviceBufferInner>) -> DgBufferTransition {
     DgBufferTransition {
         buffer: buffer,
         kind: DgAccessKind::Read,
@@ -2507,7 +2479,7 @@ pub fn buffer_transfer_read(buffer: vk::Buffer) -> DgBufferTransition {
         access: vk::AccessFlags2::TRANSFER_READ,
     }
 }
-pub fn buffer_transfer_write(buffer: vk::Buffer) -> DgBufferTransition {
+pub fn buffer_transfer_write(buffer: Handle<DeviceBufferInner>) -> DgBufferTransition {
     DgBufferTransition {
         buffer: buffer,
         kind: DgAccessKind::Write,
@@ -2516,7 +2488,7 @@ pub fn buffer_transfer_write(buffer: vk::Buffer) -> DgBufferTransition {
     }
 }
 pub fn constant_buffer_read(
-    buffer: vk::Buffer,
+    buffer: Handle<DeviceBufferInner>,
     stage: vk::PipelineStageFlags2,
 ) -> DgBufferTransition {
     DgBufferTransition {
@@ -2527,7 +2499,7 @@ pub fn constant_buffer_read(
     }
 }
 pub fn storage_buffer_read(
-    buffer: vk::Buffer,
+    buffer: Handle<DeviceBufferInner>,
     stage: vk::PipelineStageFlags2,
 ) -> DgBufferTransition {
     DgBufferTransition {
@@ -2538,7 +2510,7 @@ pub fn storage_buffer_read(
     }
 }
 pub fn storage_buffer_read_write(
-    buffer: vk::Buffer,
+    buffer: Handle<DeviceBufferInner>,
     stage: vk::PipelineStageFlags2,
 ) -> DgBufferTransition {
     DgBufferTransition {
@@ -2580,34 +2552,32 @@ where
     T: 'static,
 {
     fn enqueue_copy(ctx: &mut DeviceContext, src_buf: Self, dst_buf: &DeviceBuffer<T>) {
-        let src_buf = src_buf.clone();
-        let dst_buf = dst_buf.clone();
+        let src_buf = src_buf.handle();
+        let dst_buf = dst_buf.handle();
+
         ctx.enqueue_pass(
             "enqueue_copy_buffer",
             &[
-                buffer_transfer_read(src_buf.buffer()),
-                buffer_transfer_write(dst_buf.buffer()),
+                buffer_transfer_read(src_buf),
+                buffer_transfer_write(dst_buf),
             ],
             &[],
-            Box::new(
-                move |ctx: &mut DeviceContext, command_buffer: vk::CommandBuffer| {
-                    assert_eq!(src_buf.size(), dst_buf.size());
+            Box::new(move |ctx: &mut DeviceContext, cmd_buf: vk::CommandBuffer| {
+                let src_buf = ctx.buffers.get(src_buf).unwrap();
+                let dst_buf = ctx.buffers.get(dst_buf).unwrap();
 
-                    let regions = [vk::BufferCopy::default()
-                        .src_offset(0)
-                        .dst_offset(0)
-                        .size(src_buf.size() as vk::DeviceSize)];
+                assert_eq!(src_buf.size, dst_buf.size);
 
-                    unsafe {
-                        ctx.device.cmd_copy_buffer(
-                            command_buffer,
-                            src_buf.buffer(),
-                            dst_buf.buffer(),
-                            &regions,
-                        );
-                    }
-                },
-            ),
+                let regions = [vk::BufferCopy::default()
+                    .src_offset(0)
+                    .dst_offset(0)
+                    .size(src_buf.size as vk::DeviceSize)];
+
+                unsafe {
+                    ctx.device
+                        .cmd_copy_buffer(cmd_buf, src_buf.buffer, dst_buf.buffer, &regions);
+                }
+            }),
         );
     }
 }
@@ -2617,11 +2587,8 @@ where
     T: bytemuck::Pod,
 {
     fn enqueue_copy(ctx: &mut DeviceContext, src_ptr: Self, dst_buf: &DeviceBuffer<T>) {
-        let dst_buf = dst_buf.clone();
-
         let src_ptr = bytemuck::cast_slice(src_ptr);
-
-        let tmp_buf = ctx.create_buffer_inner::<T>(
+        let src_buf = ctx.create_buffer_inner::<T>(
             "staging_buffer",
             src_ptr.len(),
             vk::BufferUsageFlags::TRANSFER_SRC,
@@ -2631,44 +2598,36 @@ where
                 ..Default::default()
             },
         );
-
         let src_vec = src_ptr.to_vec();
-
+        let src_buf = src_buf.handle();
+        let dst_buf = dst_buf.handle();
         ctx.enqueue_pass(
             "enqueue_copy",
             &[
-                buffer_transfer_read(tmp_buf.buffer()),
-                buffer_transfer_write(dst_buf.buffer()),
+                buffer_transfer_read(src_buf),
+                buffer_transfer_write(dst_buf),
             ],
             &[],
-            Box::new(
-                move |ctx: &mut DeviceContext, command_buffer: vk::CommandBuffer| {
-                    let tmp_buf_mem = ctx
-                        .buffers
-                        .get(tmp_buf.handle())
-                        .expect(&format!("missing buffer: {}", tmp_buf.name()));
+            Box::new(move |ctx: &mut DeviceContext, cmd_buf: vk::CommandBuffer| {
+                let src_buf = ctx.buffers.get(src_buf).unwrap();
+                let dst_buf = ctx.buffers.get(dst_buf).unwrap();
 
-                    let tmp_ptr = ctx.map_memory(tmp_buf_mem.allocation, tmp_buf.size());
-                    tmp_ptr.copy_from_slice(&src_vec);
-                    ctx.unmap_memory(tmp_buf_mem.allocation);
+                let tmp_ptr = ctx.map_memory(src_buf.allocation, src_buf.size);
+                tmp_ptr.copy_from_slice(&src_vec);
+                ctx.unmap_memory(src_buf.allocation);
 
-                    assert_eq!(tmp_buf.size(), dst_buf.size());
+                assert_eq!(src_buf.size, dst_buf.size);
 
-                    let regions = [vk::BufferCopy::default()
-                        .src_offset(0)
-                        .dst_offset(0)
-                        .size(tmp_buf.size() as vk::DeviceSize)];
+                let regions = [vk::BufferCopy::default()
+                    .src_offset(0)
+                    .dst_offset(0)
+                    .size(src_buf.size as vk::DeviceSize)];
 
-                    unsafe {
-                        ctx.device.cmd_copy_buffer(
-                            command_buffer,
-                            tmp_buf.buffer(),
-                            dst_buf.buffer(),
-                            &regions,
-                        );
-                    }
-                },
-            ),
+                unsafe {
+                    ctx.device
+                        .cmd_copy_buffer(cmd_buf, src_buf.buffer, dst_buf.buffer, &regions);
+                }
+            }),
         );
     }
 }

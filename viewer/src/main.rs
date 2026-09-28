@@ -167,7 +167,7 @@ impl Renderer {
 
         let (descriptor_pool, descriptor_set) = Self::allocate_descriptor_set(&ctx, set_layout);
 
-        Self::update_descriptor_sets(&ctx, descriptor_set, &camera_buffer);
+        Self::update_descriptor_sets(&mut ctx, descriptor_set, &camera_buffer);
 
         let camera = Camera::default(window.inner_size().width, window.inner_size().height);
 
@@ -313,24 +313,33 @@ impl Renderer {
     }
 
     fn update_descriptor_sets(
-        ctx: &DeviceContext,
+        ctx: &mut DeviceContext,
         set: vk::DescriptorSet,
         camera_buffer: &DeviceBuffer<CameraUniform>,
     ) {
-        let buffer_info = [vk::DescriptorBufferInfo::default()
-            .buffer(camera_buffer.buffer())
-            .offset(0)
-            .range(camera_buffer.size() as vk::DeviceSize)];
-        let descriptor_writes = [vk::WriteDescriptorSet::default()
-            .dst_binding(0)
-            .dst_set(set)
-            .dst_array_element(0)
-            .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(&buffer_info)];
-        unsafe {
-            ctx.device.update_descriptor_sets(&descriptor_writes, &[]);
-        }
+        let camera_buffer = camera_buffer.handle();
+        ctx.enqueue_pass(
+            "update_descriptor_sets",
+            &[],
+            &[],
+            Box::new(move |ctx, _| {
+                let camera_buffer = ctx.buffer(camera_buffer);
+                let buffer_info = [vk::DescriptorBufferInfo::default()
+                    .buffer(camera_buffer.buffer())
+                    .offset(0)
+                    .range(camera_buffer.size() as vk::DeviceSize)];
+                let descriptor_writes = [vk::WriteDescriptorSet::default()
+                    .dst_binding(0)
+                    .dst_set(set)
+                    .dst_array_element(0)
+                    .descriptor_count(1)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(&buffer_info)];
+                unsafe {
+                    ctx.device.update_descriptor_sets(&descriptor_writes, &[]);
+                }
+            }),
+        )
     }
 
     unsafe fn render(&mut self, backbuffer: &SwapchainImage) {
@@ -340,20 +349,24 @@ impl Renderer {
             .enqueue_copy(&[self.camera_uniform], &self.camera_buffer);
 
         {
+            let backbuffer = backbuffer.handle();
             let extent = self.swapchain.extent().clone();
             let descriptor_set = self.descriptor_set.clone();
             let pipeline_layout = self.pipeline_layout.clone();
             let graphics_pipeline = self.graphics_pipeline.clone();
-            let backbuffer = backbuffer.clone();
+            let buffer_transitions = [constant_buffer_read(
+                self.camera_buffer.handle(),
+                vk::PipelineStageFlags2::VERTEX_SHADER,
+            )];
+            let image_transitions = [color_attachment(backbuffer)];
 
             self.ctx.enqueue_pass(
                 "TrianglePass",
-                &[constant_buffer_read(
-                    self.camera_buffer.buffer(),
-                    vk::PipelineStageFlags2::VERTEX_SHADER,
-                )],
-                &[color_attachment(&backbuffer)],
-                Box::new(move |ctx, command_buffer| {
+                &buffer_transitions,
+                &image_transitions,
+                Box::new(move |ctx, cmd_buf| {
+                    let backbuffer = ctx.image(backbuffer);
+
                     let clear_value = vk::ClearValue {
                         color: vk::ClearColorValue {
                             float32: [0.01, 0.01, 0.02, 1.0],
@@ -366,7 +379,7 @@ impl Renderer {
                     };
 
                     ctx.device.cmd_begin_rendering(
-                        command_buffer,
+                        cmd_buf,
                         &vk::RenderingInfo::default()
                             .render_area(render_area)
                             .layer_count(1)
@@ -381,7 +394,7 @@ impl Renderer {
                     let descriptor_sets = [descriptor_set.clone()];
 
                     ctx.device.cmd_bind_descriptor_sets(
-                        command_buffer,
+                        cmd_buf,
                         vk::PipelineBindPoint::GRAPHICS,
                         pipeline_layout,
                         0,
@@ -390,7 +403,7 @@ impl Renderer {
                     );
 
                     ctx.device.cmd_bind_pipeline(
-                        command_buffer,
+                        cmd_buf,
                         vk::PipelineBindPoint::GRAPHICS,
                         graphics_pipeline,
                     );
@@ -403,18 +416,17 @@ impl Renderer {
                         min_depth: 0.0,
                         max_depth: 1.0,
                     };
-                    ctx.device.cmd_set_viewport(command_buffer, 0, &[viewport]);
-                    ctx.device
-                        .cmd_set_scissor(command_buffer, 0, &[render_area]);
+                    ctx.device.cmd_set_viewport(cmd_buf, 0, &[viewport]);
+                    ctx.device.cmd_set_scissor(cmd_buf, 0, &[render_area]);
 
-                    ctx.device.cmd_draw(command_buffer, 3, 1, 0, 0);
+                    ctx.device.cmd_draw(cmd_buf, 3, 1, 0, 0);
 
-                    ctx.device.cmd_end_rendering(command_buffer);
+                    ctx.device.cmd_end_rendering(cmd_buf);
                 }),
             );
         }
 
-        self.ctx.execute(Some(backbuffer.clone())).unwrap();
+        self.ctx.execute(Some(&backbuffer)).unwrap();
     }
 
     fn update(&mut self) {
