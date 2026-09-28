@@ -53,8 +53,8 @@ mod test {
             ctx,
             func: &add_10_guard,
             push: Add10GuardPush {
-                output: out.as_ref().into(),
-                a: a.as_ref().into(),
+                output: out.read_write(),
+                a: a.read_only(),
                 len: a.len() as u64,
             },
             grid_dim: UInt3::new(BLOCKS_PER_GRID as u32, 1, 1),

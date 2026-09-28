@@ -85,8 +85,8 @@ mod test {
             ctx,
             Add102d<T>,
             push: Add102dPush {
-                output: out_tensor.as_ref().into(),
-                a: a_tensor.as_ref().into(),
+                output: out_tensor.read_write(),
+                a: a_tensor.read_only(),
             },
             grid_dim: UInt3::splat(BLOCKS_PER_GRID),
         );

@@ -61,9 +61,9 @@ mod test {
             ctx,
             func: &add,
             push: AddPush {
-                output: out.as_ref().into(),
-                a: a.as_ref().into(),
-                b: b.as_ref().into(),
+                output: out.read_write(),
+                a: a.read_only(),
+                b: b.read_only(),
             },
             grid_dim: UInt3::new(a.len() as u32, 1, 1),
         );

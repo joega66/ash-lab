@@ -7,7 +7,7 @@ use gpu::{
 use crate::tile_tensor::{DevicePointerEngine, Mutable, TensorAccess, TensorLayout, TileTensor};
 
 macro_rules! impl_device_tensor {
-    ($name:ident, $address:ident, [$($access_param:ident)?] $access:ty, $doc:literal) => {
+    ($name:ident, $address:ident, $to_address:ident, $doc:literal) => {
         #[doc = $doc]
         #[repr(C)]
         pub struct $name<DType: ShaderType, LayoutType> {
@@ -18,7 +18,7 @@ macro_rules! impl_device_tensor {
         impl<DType: ShaderType, LayoutType> $name<DType, LayoutType> {
             pub fn new(buffer: &DeviceBuffer<DType>, layout: LayoutType) -> Self {
                 Self {
-                    storage: buffer.into(),
+                    storage: buffer.$to_address(),
                     layout,
                 }
             }
@@ -65,18 +65,6 @@ macro_rules! impl_device_tensor {
         {
         }
 
-        impl<DType, LayoutType $(, $access_param: TensorAccess)?>
-            From<&TileTensor<'_, DType, LayoutType, DevicePointerEngine, $access>>
-            for $name<DType, LayoutType>
-        where
-            DType: ShaderType,
-            LayoutType: TensorLayout + Copy,
-        {
-            fn from(value: &TileTensor<'_, DType, LayoutType, DevicePointerEngine, $access>) -> Self {
-                Self::new(value.storage(), value.layout())
-            }
-        }
-
         impl<DType: ShaderType, LayoutType: ShaderType> ShaderType for $name<DType, LayoutType> {
             fn type_layout() -> TypeLayout {
                 TypeLayout::Struct {
@@ -103,12 +91,35 @@ macro_rules! impl_device_tensor {
 impl_device_tensor!(
     DeviceTensor,
     DeviceAddress,
-    [Access] Access,
+    read_only,
     "A tensor a shader may read."
 );
 impl_device_tensor!(
     RWDeviceTensor,
     RWDeviceAddress,
-    [] Mutable,
+    read_write,
     "A tensor a shader may read and write."
 );
+
+impl<DType, LayoutType, Access> TileTensor<'_, DType, LayoutType, DevicePointerEngine, Access>
+where
+    DType: ShaderType,
+    LayoutType: TensorLayout + Copy,
+    Access: TensorAccess,
+{
+    /// This tensor as a shader argument the shader only reads.
+    pub fn read_only(&self) -> DeviceTensor<DType, LayoutType> {
+        DeviceTensor::new(self.storage(), self.layout())
+    }
+}
+
+impl<DType, LayoutType> TileTensor<'_, DType, LayoutType, DevicePointerEngine, Mutable>
+where
+    DType: ShaderType,
+    LayoutType: TensorLayout + Copy,
+{
+    /// This tensor as a shader argument the shader reads and writes.
+    pub fn read_write(&self) -> RWDeviceTensor<DType, LayoutType> {
+        RWDeviceTensor::new(self.storage(), self.layout())
+    }
+}

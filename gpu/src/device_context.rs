@@ -2019,10 +2019,6 @@ impl<T> DeviceBuffer<T> {
     pub fn len(&self) -> usize {
         self.size() / std::mem::size_of::<T>()
     }
-
-    pub fn as_ref(&self) -> &Self {
-        self
-    }
 }
 
 impl<T> Drop for DeviceBuffer<T> {

@@ -50,8 +50,8 @@ mod test {
             ctx,
             func: &add_10,
             push: Add10Push {
-                output: out.as_ref().into(),
-                a: a.as_ref().into(),
+                output: out.read_write(),
+                a: a.read_only(),
             },
             grid_dim: UInt3::new(a.len() as u32, 1, 1),
         );

@@ -165,10 +165,6 @@ where
         }
     }
 
-    pub fn as_ref(&self) -> &Self {
-        self
-    }
-
     pub(crate) fn storage(&self) -> &Engine::StorageType<DType> {
         &*self.storage
     }

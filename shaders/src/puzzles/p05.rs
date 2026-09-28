@@ -67,9 +67,9 @@ mod test {
             ctx,
             BroadcastAdd,
             push: BroadcastAddPush {
-                output: out_tensor.as_ref().into(),
-                a: a_tensor.as_ref().into(),
-                b: b_tensor.as_ref().into(),
+                output: out_tensor.read_write(),
+                a: a_tensor.read_only(),
+                b: b_tensor.read_only(),
             },
             grid_dim: UInt3::splat(BLOCKS_PER_GRID),
         );

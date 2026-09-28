@@ -153,19 +153,19 @@ unsafe impl<T: ShaderType + 'static> bytemuck::Pod for DeviceAddress<T> {}
 unsafe impl<T: ShaderType + 'static> bytemuck::Zeroable for RWDeviceAddress<T> {}
 unsafe impl<T: ShaderType + 'static> bytemuck::Pod for RWDeviceAddress<T> {}
 
-impl<T: ShaderType> From<&DeviceBuffer<T>> for DeviceAddress<T> {
-    fn from(value: &DeviceBuffer<T>) -> Self {
-        Self {
-            tagged: value.handle().as_u64(),
+impl<T: ShaderType> DeviceBuffer<T> {
+    /// The address of this buffer, for a shader that only reads it.
+    pub fn read_only(&self) -> DeviceAddress<T> {
+        DeviceAddress {
+            tagged: self.handle().as_u64(),
             _marker: PhantomData,
         }
     }
-}
 
-impl<T: ShaderType> From<&DeviceBuffer<T>> for RWDeviceAddress<T> {
-    fn from(value: &DeviceBuffer<T>) -> Self {
-        Self {
-            tagged: value.handle().as_u64(),
+    /// The address of this buffer, for a shader that reads and writes it.
+    pub fn read_write(&self) -> RWDeviceAddress<T> {
+        RWDeviceAddress {
+            tagged: self.handle().as_u64(),
             _marker: PhantomData,
         }
     }
