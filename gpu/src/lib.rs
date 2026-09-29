@@ -19,8 +19,13 @@ pub use device_context::{
     sampled_fragment, storage_buffer_read, storage_buffer_read_write,
 };
 
+mod const_param;
+pub use const_param::{
+    ConstBool, ConstI8, ConstI16, ConstI32, ConstI64, ConstU8, ConstU16, ConstU32, ConstU64,
+};
+
 mod dtype;
-pub use dtype::{DType, DTypeOf};
+pub use dtype::{Bool32, DType, DTypeOf};
 
 mod descriptor_pool;
 

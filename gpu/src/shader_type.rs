@@ -34,7 +34,7 @@ impl ScalarKind {
     }
 
     /// The wrapper struct in `dtype.slang` that carries this scalar, for the scalars that
-    /// have one.
+    /// have one. `double` has none, because Metal has no 64-bit float.
     ///
     /// A generic kernel is instantiated with the wrapper rather than the bare scalar,
     /// because `slangc -specialize` only accepts a type that declares its interfaces
@@ -42,10 +42,17 @@ impl ScalarKind {
     /// scalar's layout and the host still binds a plain `f32`/`i32`/`u32` against it.
     pub fn wrapper_name(self) -> Option<&'static str> {
         match self {
-            ScalarKind::Float32 => Some("F32"),
+            ScalarKind::Bool => Some("B32"),
+            ScalarKind::Int8 => Some("I8"),
+            ScalarKind::UInt8 => Some("U8"),
+            ScalarKind::Int16 => Some("I16"),
+            ScalarKind::UInt16 => Some("U16"),
             ScalarKind::Int32 => Some("I32"),
             ScalarKind::UInt32 => Some("U32"),
-            _ => None,
+            ScalarKind::Int64 => Some("I64"),
+            ScalarKind::UInt64 => Some("U64"),
+            ScalarKind::Float32 => Some("F32"),
+            ScalarKind::Float64 => None,
         }
     }
 

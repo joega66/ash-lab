@@ -81,6 +81,30 @@ pub fn shader(input: TokenStream) -> TokenStream {
 ///     path: "gemm.slang",
 /// );
 /// ```
+///
+/// A function may also be specialized on values, declared as Rust `const` parameters and
+/// in Slang as `let` parameters, in the same order as the type parameters around them. Each
+/// value is passed to slangc as a literal through `-specialize`, so the kernel sees a
+/// compile-time constant. A `const` parameter is one of `bool`, `i8`, `u8`, `i16`, `u16`,
+/// `i32`, `u32`, `i64` or `u64`, and needs a `for [..]` list, since there is no default set
+/// of values:
+///
+/// ```ignore
+/// function!(
+///     AddConst<T, const N: i64, const NEGATE: bool> for [(f32, 10, false), (i32, -3, true)],
+///     push: AddConstPush<T>,
+///     name: "main",
+///     path: "add_const.slang",
+/// );
+/// ```
+///
+/// ```ignore
+/// void main<T : IDType, let N : int64_t, let NEGATE : bool>(uniform AddConstPush<T> push) { }
+/// ```
+///
+/// slangc does not reflect a `let` parameter's type, so it cannot be checked against the
+/// Rust one; slangc converts the literal to whatever the shader declared. Declare the two
+/// with the same type.
 #[proc_macro]
 pub fn function(input: TokenStream) -> TokenStream {
     let decl = parse_macro_input!(input as device_function::FunctionDecl);

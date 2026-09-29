@@ -18,7 +18,7 @@ pub struct BroadcastAddPush {
 }
 
 function!(
-    BroadcastAdd,
+    BroadcastAdd<const SIZE: u32, const X: u32, const Y: u32> for [(SIZE as u32, THREADS_PER_BLOCK.0 as u32, THREADS_PER_BLOCK.1 as u32)],
     push: BroadcastAddPush,
     name: "main",
     path: "p05.slang",
@@ -65,7 +65,7 @@ mod test {
 
         enqueue_function!(
             ctx,
-            BroadcastAdd,
+            BroadcastAdd<{SIZE as u32}, {THREADS_PER_BLOCK.0 as u32}, {THREADS_PER_BLOCK.1 as u32}>,
             push: BroadcastAddPush {
                 output: out_tensor.read_write(),
                 a: a_tensor.read_only(),

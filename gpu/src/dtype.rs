@@ -1,4 +1,7 @@
-use crate::{bytemuck, shader_type::ScalarKind, shader_type::ShaderType};
+use crate::{
+    bytemuck,
+    shader_type::{ScalarKind, ShaderType, TypeLayout},
+};
 
 /// A scalar element type that a generic device function may be instantiated over.
 ///
@@ -29,8 +32,45 @@ pub trait DType: ShaderType + bytemuck::Pod + 'static {
     }
 }
 
+/// A shader `bool`, as the host sees it.
+///
+/// Slang stores a `bool` in a buffer or push constant as a 32-bit word, while a Rust `bool`
+/// is one byte and not [`Pod`](bytemuck::Pod) (only 0 and 1 are valid), so it cannot stand
+/// in for one. Any nonzero word reads as `true` on the device; [`From<bool>`] writes 0 or 1.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, bytemuck::Zeroable, bytemuck::Pod)]
+#[bytemuck(crate = "crate::bytemuck")]
+pub struct Bool32(pub u32);
+
+impl Bool32 {
+    pub const FALSE: Self = Self(0);
+    pub const TRUE: Self = Self(1);
+
+    pub fn get(self) -> bool {
+        self.0 != 0
+    }
+}
+
+impl From<bool> for Bool32 {
+    fn from(value: bool) -> Self {
+        Self(value as u32)
+    }
+}
+
+impl From<Bool32> for bool {
+    fn from(value: Bool32) -> Self {
+        value.get()
+    }
+}
+
+impl ShaderType for Bool32 {
+    fn type_layout() -> TypeLayout {
+        TypeLayout::Scalar(ScalarKind::Bool)
+    }
+}
+
 /// Proof that a generic device function `F` was registered for this element type, or for
-/// this combination of them.
+/// this combination of generic arguments.
 ///
 /// A generic `function!` declares the impls for the entries it lists, so anything outside
 /// that list leaves `F` without a [`DeviceFunctionLike`](crate::DeviceFunctionLike) impl
@@ -40,11 +80,13 @@ pub trait DType: ShaderType + bytemuck::Pod + 'static {
 /// A function over one type parameter carries the proof on the type itself; one over
 /// several carries it on the tuple, so that the list constrains the *combination* rather
 /// than each parameter separately. `Gemm<f16, f32>` can be registered without
-/// `Gemm<f32, f16>` coming along with it.
+/// `Gemm<f32, f16>` coming along with it. A `const` argument sits in the tuple as its
+/// marker type, such as [`ConstU32`](crate::ConstU32), so `Scale<f32, 4>` is proven by
+/// `(f32, ConstU32<4>)`.
 #[diagnostic::on_unimplemented(
     message = "`{F}` was not registered for `{Self}`",
-    label = "no pipeline was compiled for this element type",
-    note = "add `{Self}` to the `for [..]` list on the `function!` that declares `{F}`"
+    label = "no pipeline was compiled for these generic arguments",
+    note = "add these arguments to the `for [..]` list on the `function!` that declares `{F}`"
 )]
 pub trait DTypeOf<F: ?Sized> {}
 
@@ -58,16 +100,23 @@ pub trait DTypeOf<F: ?Sized> {}
 /// ```ignore
 /// for_each_dtype!(my_macro!(some, args));
 /// // expands to:
-/// my_macro!(some, args; [f32 => ScalarKind::Float32] [i32 => ...] [u32 => ...]);
+/// my_macro!(some, args; [Bool32 => ScalarKind::Bool] [i8 => ...] ... [f32 => ...]);
 /// ```
 #[macro_export]
 macro_rules! for_each_dtype {
     ($callback:ident ! ( $($args:tt)* )) => {
         $crate::$callback!(
             $($args)* ;
-            [f32 => $crate::shader_type::ScalarKind::Float32]
+            [$crate::Bool32 => $crate::shader_type::ScalarKind::Bool]
+            [i8 => $crate::shader_type::ScalarKind::Int8]
+            [u8 => $crate::shader_type::ScalarKind::UInt8]
+            [i16 => $crate::shader_type::ScalarKind::Int16]
+            [u16 => $crate::shader_type::ScalarKind::UInt16]
             [i32 => $crate::shader_type::ScalarKind::Int32]
             [u32 => $crate::shader_type::ScalarKind::UInt32]
+            [i64 => $crate::shader_type::ScalarKind::Int64]
+            [u64 => $crate::shader_type::ScalarKind::UInt64]
+            [f32 => $crate::shader_type::ScalarKind::Float32]
         );
     };
 }

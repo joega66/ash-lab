@@ -1,23 +1,19 @@
 #include "../tile_tensor.slang"
 
-static const uint SIZE = 2;
-static const uint THREADS_PER_BLOCK_X = 3;
-static const uint THREADS_PER_BLOCK_Y = 3;
-typealias DType = float;
-typealias OutLayout = RowMajorLayout<Shape2<Const<SIZE>, Const<SIZE>>>;
-typealias ALayout = RowMajorLayout<Shape2<Const<1>, Const<SIZE>>>;
-typealias BLayout = RowMajorLayout<Shape2<Const<SIZE>, Const<1>>>;
+struct BroadcastAddPush<let SIZE : uint32_t> {
+    typealias OutLayout = RowMajorLayout<Shape2<Const<SIZE>, Const<SIZE>>>;
+    typealias ALayout = RowMajorLayout<Shape2<Const<1>, Const<SIZE>>>;
+    typealias BLayout = RowMajorLayout<Shape2<Const<SIZE>, Const<1>>>;
 
-struct BroadcastAddPush {
-    TileTensor<DType, OutLayout> output;
-    TileTensor<DType, ALayout> a;
-    TileTensor<DType, BLayout> b;
+    TileTensor<float, OutLayout> output;
+    TileTensor<float, ALayout> a;
+    TileTensor<float, BLayout> b;
 };
 
-[numthreads(THREADS_PER_BLOCK_X, THREADS_PER_BLOCK_Y, 1)]
-void main(
+[numthreads(X, Y, 1)]
+void main<let SIZE : uint32_t, let X : uint32_t, let Y : uint32_t>(
     uint2 thread_id: SV_DispatchThreadID,
-    uniform BroadcastAddPush push) {
+    uniform BroadcastAddPush<SIZE> push) {
     let row = thread_id.y;
     let col = thread_id.x;
     if (!push.output.in_bounds(row, col)) {

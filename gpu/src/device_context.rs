@@ -196,8 +196,10 @@ impl DeviceContext {
         usage: vk::BufferUsageFlags,
         memory_info: &vk_mem::AllocationCreateInfo,
     ) -> DeviceBuffer<T> {
+        // Rounded up to a whole word so that `enqueue_fill`, which writes 4-byte words, can
+        // cover the last elements of an 8- or 16-bit buffer.
         let create_info = vk::BufferCreateInfo::default()
-            .size(size as vk::DeviceSize)
+            .size(size.next_multiple_of(4) as vk::DeviceSize)
             .usage(usage);
 
         let (buffer, allocation) = unsafe {
@@ -418,7 +420,7 @@ impl DeviceContext {
                         cmd_buf,
                         input.buffer,
                         0,
-                        input.size as vk::DeviceSize,
+                        input.size.next_multiple_of(4) as vk::DeviceSize,
                         value,
                     )
                 };
@@ -1289,11 +1291,33 @@ impl DeviceContext {
         extension_names.push(khr::synchronization2::NAME.as_ptr());
         extension_names.push(khr::dynamic_rendering::NAME.as_ptr());
 
-        let mut vulkan_11_features =
-            vk::PhysicalDeviceVulkan11Features::default().shader_draw_parameters(true);
+        // The 8- and 16-bit element types need their own arithmetic and storage features,
+        // which not every device has. Each is enabled where it is supported; a kernel
+        // instantiated over a type the device lacks fails when its pipeline is created.
+        let mut supported_11 = vk::PhysicalDeviceVulkan11Features::default();
+        let mut supported_12 = vk::PhysicalDeviceVulkan12Features::default();
+        let mut supported = vk::PhysicalDeviceFeatures2::default()
+            .push(&mut supported_11)
+            .push(&mut supported_12);
+        unsafe { instance.get_physical_device_features2(physical_device, &mut supported) };
+        let supported_10 = supported.features;
+
+        let mut vulkan_11_features = vk::PhysicalDeviceVulkan11Features::default()
+            .shader_draw_parameters(true)
+            .storage_buffer16_bit_access(supported_11.storage_buffer16_bit_access != 0)
+            .uniform_and_storage_buffer16_bit_access(
+                supported_11.uniform_and_storage_buffer16_bit_access != 0,
+            )
+            .storage_push_constant16(supported_11.storage_push_constant16 != 0);
         let mut vulkan_12_features = vk::PhysicalDeviceVulkan12Features::default()
             .timeline_semaphore(true)
-            .buffer_device_address(true);
+            .buffer_device_address(true)
+            .shader_int8(supported_12.shader_int8 != 0)
+            .storage_buffer8_bit_access(supported_12.storage_buffer8_bit_access != 0)
+            .uniform_and_storage_buffer8_bit_access(
+                supported_12.uniform_and_storage_buffer8_bit_access != 0,
+            )
+            .storage_push_constant8(supported_12.storage_push_constant8 != 0);
         let mut vulkan_13_features = vk::PhysicalDeviceVulkan13Features::default()
             .synchronization2(true)
             .dynamic_rendering(true)
@@ -1302,7 +1326,10 @@ impl DeviceContext {
             .push(&mut vulkan_11_features)
             .push(&mut vulkan_12_features)
             .push(&mut vulkan_13_features);
-        features2.features = features2.features.shader_int64(true);
+        features2.features = features2
+            .features
+            .shader_int64(true)
+            .shader_int16(supported_10.shader_int16 != 0);
 
         let create_info = unsafe {
             vk::DeviceCreateInfo::default()
@@ -2517,8 +2544,42 @@ pub fn storage_buffer_read_write(
     }
 }
 
+/// A value `enqueue_fill` can write, as the 4-byte pattern `vkCmdFillBuffer` repeats.
+///
+/// A type narrower than a word repeats itself across it. A 64-bit type has no such pattern
+/// in general, so it is not fillable.
 pub trait U32Castable {
     fn to_u32(self) -> u32;
+}
+
+impl U32Castable for crate::Bool32 {
+    fn to_u32(self) -> u32 {
+        self.0
+    }
+}
+
+impl U32Castable for i8 {
+    fn to_u32(self) -> u32 {
+        (self as u8).to_u32()
+    }
+}
+
+impl U32Castable for u8 {
+    fn to_u32(self) -> u32 {
+        u32::from_le_bytes([self; 4])
+    }
+}
+
+impl U32Castable for i16 {
+    fn to_u32(self) -> u32 {
+        (self as u16).to_u32()
+    }
+}
+
+impl U32Castable for u16 {
+    fn to_u32(self) -> u32 {
+        self as u32 | (self as u32) << 16
+    }
 }
 
 impl U32Castable for f32 {

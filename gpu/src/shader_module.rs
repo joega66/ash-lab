@@ -86,9 +86,10 @@ pub trait DynShaderModuleLike {
 
     fn defines(&self, index: usize) -> Vec<(&'static str, String)>;
 
-    /// The Slang type arguments this instantiation specializes the entry point with, one
-    /// per type parameter and in declaration order, e.g. `["float"]` or
-    /// `["float", "uint"]`. Empty for a non-generic shader.
+    /// The Slang generic arguments this instantiation specializes the entry point with, one
+    /// per generic parameter and in declaration order, e.g. `["F32"]`, `["F32", "U32"]`,
+    /// or `["F32", "4", "true"]` for a function that also takes values. Empty for a
+    /// non-generic shader.
     ///
     /// The shader declares an ordinary Slang generic and the compiler passes these to
     /// slangc as `-specialize`, so the kernel reads as generic code rather than as a
@@ -100,13 +101,14 @@ pub trait DynShaderModuleLike {
     /// dimension: a permutation is chosen at the call site by a value, an instantiation by
     /// a type. Each instantiation is its own shader module type, so the artifacts it builds
     /// are the full cross product of the two axes.
-    fn specialization_args(&self) -> Vec<&'static str> {
+    fn specialization_args(&self) -> Vec<String> {
         Vec::new()
     }
 
     /// A file-name-safe tag separating this instantiation's build artifacts from its
-    /// siblings', derived from the element types it was instantiated with: `float`, or
-    /// `float_uint` for a function over a pair. Empty for a non-generic shader.
+    /// siblings', derived from the arguments it was instantiated with: `f32`, `f32_u32`
+    /// for a function over a pair, or `f32_4_true` for one that also takes values. Empty
+    /// for a non-generic shader.
     ///
     /// Taken from [`Self::specialization_args`] rather than stored beside it, so the two
     /// cannot disagree about what this instantiation is, whatever its arity.
