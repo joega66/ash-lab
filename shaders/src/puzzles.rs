@@ -3,3 +3,4 @@ mod p02;
 mod p03;
 mod p04;
 mod p05;
+mod p06;

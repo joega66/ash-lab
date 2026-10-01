@@ -430,12 +430,12 @@ impl DeviceContext {
 
     /// Enqueues an async copy from the host to the provided device buffer. The
     /// number of bytes copied is determined by the size of the device buffer.
-    pub fn enqueue_copy<T, U: EnqueueCopyable<T>>(
+    pub fn enqueue_copy<T, M, U: EnqueueCopyable<T, M>>(
         &mut self,
         src_buf: U,
         dst_buf: &DeviceBuffer<T>,
     ) {
-        <U as EnqueueCopyable<T>>::enqueue_copy(self, src_buf, dst_buf);
+        <U as EnqueueCopyable<T, M>>::enqueue_copy(self, src_buf, dst_buf);
     }
 
     /// Enqueues an external device function for execution on this device.
@@ -2600,7 +2600,14 @@ impl U32Castable for u32 {
     }
 }
 
-pub trait EnqueueCopyable<T> {
+/// Marker for [`EnqueueCopyable`] impls on concrete source types.
+pub struct CopyFromValue;
+
+/// Marker for the blanket [`EnqueueCopyable`] impl on iterators. Keeps it from
+/// overlapping with the impls for slices and other foreign types.
+pub struct CopyFromIter;
+
+pub trait EnqueueCopyable<T, M = CopyFromValue> {
     fn enqueue_copy(ctx: &mut DeviceContext, src_buf: Self, dst_buf: &DeviceBuffer<T>);
 }
 
@@ -2704,5 +2711,16 @@ where
 {
     fn enqueue_copy(ctx: &mut DeviceContext, src_ptr: Self, dst_buf: &DeviceBuffer<T>) {
         <&[T] as EnqueueCopyable<T>>::enqueue_copy(ctx, src_ptr.as_slice(), dst_buf);
+    }
+}
+
+impl<T, I> EnqueueCopyable<T, CopyFromIter> for I
+where
+    T: bytemuck::Pod,
+    I: Iterator<Item = T>,
+{
+    fn enqueue_copy(ctx: &mut DeviceContext, src_iter: Self, dst_buf: &DeviceBuffer<T>) {
+        let src_vec = src_iter.collect::<Vec<T>>();
+        <&[T] as EnqueueCopyable<T>>::enqueue_copy(ctx, src_vec.as_slice(), dst_buf);
     }
 }
